@@ -1,0 +1,2416 @@
+.tt-settings {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分组：标题在卡片外部，卡片只放 items */
+.tt-group {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 28px;
+}
+.tt-group:last-child {
+  margin-bottom: 0;
+}
+.tt-group__title {
+  font-size: calc(var(--b3-font-size) + 2px);
+  font-weight: bold;
+  color: var(--b3-theme-on-background);
+  line-height: 1.5;
+  margin: 0 0 16px 4px;
+  letter-spacing: 0.2px;
+}
+.tt-group__card {
+  display: flex;
+  flex-direction: column;
+  /* 卡片背景对齐轻语：surface 取 50% 再与 transparent 混，得到一层很淡的卡片底，
+     页面保持 background（不直接用实心 surface，避免暗色主题下卡片过深） */
+  background: color-mix(in srgb, var(--b3-theme-surface, var(--b3-theme-background)) 50%, transparent);
+  border-radius: 10px;
+  /* 不加 overflow:hidden，否则会剪掉自定义下拉的弹出层 */
+}
+
+/* 行：左文（标题 + 描述） + 右控件；行间 1px 分隔线（用 ::after 内缩） */
+.tt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 18px;
+  position: relative;
+  transition: background 0.12s ease;
+}
+/* 首/末行外圆角，让整组 items 与卡片圆角吻合 */
+.tt-row:first-child { border-radius: 10px 10px 0 0; }
+.tt-row:last-child { border-radius: 0 0 10px 10px; }
+.tt-row:first-child:last-child { border-radius: 10px; }
+.tt-row:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--b3-border-color) 35%, transparent);
+  pointer-events: none;
+}
+.tt-row__left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tt-row__title {
+  font-size: calc(var(--b3-font-size) + 1px);
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+  line-height: 20px;
+  margin-bottom: 2px;
+  letter-spacing: 0.2px;
+}
+.tt-row__desc {
+  font-size: calc(var(--b3-font-size) - 1px);
+  color: var(--b3-theme-on-surface);
+  line-height: 2.5;
+}
+.tt-row__right {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+/* 行内动作按钮：同款轻语 .north-luna-settings-btn */
+.tt-row__button {
+  padding: 5px 14px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  border-radius: 6px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-surface);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.tt-row__button:hover {
+  border-color: var(--b3-theme-primary, #5b8def);
+  color: var(--b3-theme-primary, #5b8def);
+}
+
+/* 行内属性名输入：custom- [输入框] -content（两端固定，仅中段可编辑） */
+.tt-attr {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background-color: var(--b3-theme-background);
+  font-size: 12.5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tt-attr:focus-within {
+  border-color: var(--b3-theme-primary, #5b8def);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--b3-theme-primary) 18%, transparent);
+}
+.tt-attr__fix {
+  color: var(--b3-theme-on-surface);
+  font-size: 12.5px;
+  line-height: 16px;
+  user-select: none;
+}
+.tt-attr__input {
+  width: 76px;
+  min-width: 0;
+  padding: 5px 2px;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  font-size: 12.5px;
+  font-family: inherit;
+  line-height: 16px;
+  text-align: center;
+  outline: none;
+}
+.tt-attr__input::placeholder {
+  color: var(--b3-theme-on-surface);
+  opacity: 0.55;
+}
+
+/* ===================== 自定义下拉（1:1 复刻轻语 .north-luna-settings-cddl） ===================== */
+.tt-cddl {
+  position: relative;
+  min-width: 120px;
+}
+.tt-cddl__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 10px 5px 12px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background-color: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tt-cddl__trigger:hover {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 50%, var(--b3-border-color));
+}
+.tt-cddl.open .tt-cddl__trigger {
+  border-color: var(--b3-theme-primary, #5b8def);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--b3-theme-primary, #5b8def) 15%, transparent);
+}
+.tt-cddl__value {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-cddl__arrow {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform 0.2s ease;
+}
+.tt-cddl.open .tt-cddl__arrow {
+  transform: rotate(180deg);
+  color: var(--b3-theme-primary, #5b8def);
+}
+.tt-cddl__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background-color: var(--b3-theme-background);
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  z-index: 100;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+}
+.tt-cddl.open .tt-cddl__popup {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+/* 向下空间不足时向上展开（与轻语一致） */
+.tt-cddl.drop-up .tt-cddl__popup {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.tt-cddl__item {
+  padding: 6px 14px;
+  font-size: 12.5px;
+  color: var(--b3-theme-on-background);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.tt-cddl__item:hover {
+  background-color: color-mix(in srgb, var(--b3-theme-primary) 8%, transparent);
+}
+.tt-cddl__item.active {
+  color: var(--b3-theme-primary, #5b8def);
+  font-weight: 600;
+}
+
+/* 开关（行内右控件，仿轻语：32×18，14 圆球，14px 位移） */
+.tt-toggle {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tt-toggle__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.tt-toggle__input:checked + .tt-toggle__slider {
+  background: var(--b3-theme-primary, #5b8def);
+}
+.tt-toggle__input:checked + .tt-toggle__slider::before {
+  transform: translateX(14px);
+}
+.tt-toggle__input:focus-visible + .tt-toggle__slider {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--b3-theme-primary) 30%, transparent);
+}
+.tt-toggle__slider {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--b3-border-color) 80%, var(--b3-theme-on-surface-light, #999));
+  border-radius: 18px;
+  transition: background 0.2s ease;
+}
+.tt-toggle__slider::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1.5px 3px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+/* ===================== 类型管理弹窗 ===================== */
+
+.tt-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tt-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+.tt-modal__panel {
+  position: relative;
+  width: min(620px, 92vw);
+  max-height: 85vh;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tt-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 50%, transparent);
+  cursor: grab;
+  user-select: none;
+}
+.tt-modal__header--dragging {
+  cursor: grabbing;
+}
+.tt-modal__header-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.tt-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tt-modal__close:hover {
+  background: color-mix(in srgb, var(--b3-theme-on-surface) 10%, transparent);
+  color: var(--b3-theme-on-background);
+}
+.tt-modal__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px 18px;
+}
+.tt-modal__body::-webkit-scrollbar {
+  width: 6px;
+}
+.tt-modal__body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--b3-border-color) 80%, transparent);
+  border-radius: 3px;
+}
+
+/* ===================== 设置弹窗（左侧导航 + 右侧内容） =====================
+   把侧边栏 Dock 里的设置视图抽出来，做成思源原生设置弹窗那种版式。
+   层级刻意低于类型管理弹窗（.tt-modal = 9999）—— 设置里的「类型管理」
+   会在这个弹窗之上再开一层，不能被盖住。 */
+
+.tt-settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9990;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tt-settings-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+.tt-settings-modal__panel {
+  position: relative;
+  width: min(1040px, 96vw);
+  height: min(760px, 90vh);
+  display: flex;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+/* 左：导航列（标题 + 搜索 + 分组项），宽度对齐轻语设置视图的 220px 侧栏。
+   背景与右侧内容区一致（都走 --b3-theme-background），只靠一条分隔线区分 ——
+   对齐思源原生设置弹窗与轻语设置视图；用 --b3-theme-surface 会偏色。 */
+.tt-settings-modal__nav {
+  width: 220px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 10px;
+  border-right: 1px solid var(--b3-border-color);
+  background: var(--b3-theme-background);
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+.tt-settings-modal__nav-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  padding: 4px 10px 12px;
+  letter-spacing: 0.3px;
+}
+.tt-settings-modal__nav-title-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+.tt-settings-modal__search {
+  height: 30px;
+  margin: 0 0 10px;
+  padding: 0 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 12.5px;
+  font-family: inherit;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-settings-modal__search:focus {
+  border-color: var(--b3-theme-primary);
+}
+.tt-settings-modal__nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 左导航项对齐轻语 .north-luna-settings-cat-item：行高 33px、横向留 10px 边距、字号走主题变量 */
+.tt-settings-modal__navitem {
+  line-height: 33px;
+  min-height: 28px;
+  margin: 3px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  font-size: var(--b3-font-size);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tt-settings-modal__navitem-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+.tt-settings-modal__navitem:hover {
+  background: var(--b3-list-hover);
+}
+/* 激活态：淡主色半透明背景 + 主色文字（与思源原生设置、轻语一致） */
+.tt-settings-modal__navitem.active {
+  background: color-mix(in srgb, var(--b3-theme-primary) 15%, transparent);
+  color: var(--b3-theme-primary);
+  font-weight: 500;
+}
+
+/* 右：内容区（可滚动，复用 .tt-settings / .tt-group / .tt-row 那套排版），内边距对齐轻语设置主区 */
+.tt-settings-modal__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px 32px 32px;
+}
+.tt-settings-modal__main::-webkit-scrollbar {
+  width: 6px;
+}
+.tt-settings-modal__main::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--b3-border-color) 80%, transparent);
+  border-radius: 3px;
+}
+/* 右上角关闭：定位在面板上（不是滚动容器内），滚动内容时不会跟着跑 */
+.tt-settings-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tt-settings-modal__close:hover {
+  background: color-mix(in srgb, var(--b3-theme-on-surface) 10%, transparent);
+  color: var(--b3-theme-on-background);
+}
+/* 分组标题给关闭按钮让出位置 */
+.tt-settings-modal__body .tt-group__title {
+  padding-right: 40px;
+}
+
+/* Dock 紧凑模式的相关样式统一收敛到文件末尾
+   「Dock 紧凑模式（最终覆盖）」，原因见该处注释。 */
+
+/* ===================== 记录类型管理（设置卡片内） ===================== */
+
+.tt-types {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.tt-types__intro {
+  margin-bottom: 16px;
+  font-size: var(--b3-font-size);
+  line-height: 1.6;
+  color: var(--b3-theme-on-surface);
+}
+.tt-types__groups {
+  display: flex;
+  flex-direction: column;
+}
+.tt-types__group {
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 25%, transparent);
+}
+.tt-types__group:first-child {
+  padding-top: 0;
+}
+.tt-types__group:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.tt-types__group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.tt-types__group-name {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-types__group-name:focus {
+  border-bottom-color: color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.tt-types__group-name::placeholder {
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
+}
+/* 与类型色块同理：形状钉住，不随主题变圆（原因见 .tt-types__item-color 的说明） */
+.tt-types .tt-types__group-color {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 2px !important;
+  background: transparent !important;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.tt-types .tt-types__group-color:hover {
+  transform: scale(1.1);
+}
+.tt-types .tt-types__group-color::-webkit-color-swatch-wrapper {
+  padding: 0 !important;
+}
+.tt-types .tt-types__group-color::-webkit-color-swatch {
+  border: none !important;
+  border-radius: 2px !important;
+}
+.tt-types__group-remove {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light, #999);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+}
+.tt-types__group-head:hover .tt-types__group-remove {
+  opacity: 1;
+}
+.tt-types__group-remove:hover {
+  color: var(--b3-theme-error, #d23f31);
+  background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 15%, transparent);
+}
+.tt-types__group-desc {
+  margin-bottom: 8px;
+}
+.tt-types__group-desc-input {
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-types__group-desc-input:focus {
+  border-bottom-color: color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.tt-types__group-desc-input::placeholder {
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
+}
+.tt-types__group-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tt-types__item-add,
+.tt-types__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 3px 8px 3px 6px;
+  background: var(--b3-theme-surface);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 40%, transparent);
+  border-radius: 6px;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.tt-types__item-add {
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--b3-theme-on-surface);
+  font-size: 14px;
+  cursor: pointer;
+}
+.tt-types__item-add:hover {
+  border-color: var(--b3-theme-primary);
+  color: var(--b3-theme-primary);
+  background: color-mix(in srgb, var(--b3-theme-primary) 8%, transparent);
+}
+.tt-types__item:hover {
+  border-color: color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+}
+/* 色块一律保持方块。主题（或代码片段）经常给 input[type="color"] 加圆角，
+   它们的选择器通常比单个类名更具体（input[type="color"] 是 0,1,1，单个类只有 0,1,0），
+   切主题时形状就被压掉、变成圆形。这里两道保险：
+   一是前缀 .tt-types 提特异性（0,2,0，胜过主题常见的 input[type="color"]），
+   二是形状相关属性一律 !important（主题若也用 !important，仍靠前者更高特异性胜出）。
+   要调圆角只改这一处：元素与内部 swatch 两处必须保持一致。 */
+.tt-types .tt-types__item-color {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 2px !important;
+  background: transparent !important;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.tt-types .tt-types__item-color:hover {
+  transform: scale(1.1);
+}
+/* 去掉浏览器给 color input 内部色块加的默认 padding/边框，让颜色填满整个方块 */
+.tt-types .tt-types__item-color::-webkit-color-swatch-wrapper {
+  padding: 0 !important;
+}
+.tt-types .tt-types__item-color::-webkit-color-swatch {
+  border: none !important;
+  border-radius: 2px !important;
+}
+.tt-types__item-name {
+  width: auto;
+  min-width: 18px;
+  max-width: 120px;
+  margin: 0 0 0 8px;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  font-size: 12px;
+  line-height: 1.4;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-types__item-name:focus {
+  border-bottom-color: color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.tt-types__item-name::placeholder {
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
+}
+.tt-types__item-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: -4px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--b3-theme-error, #d23f31);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.tt-types__item-remove:hover {
+  color: var(--b3-theme-error, #d23f31);
+  background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 15%, transparent);
+}
+.tt-types__group-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 5px 12px;
+  border: 1px dashed color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.tt-types__group-add:hover {
+  border-color: var(--b3-theme-primary);
+  color: var(--b3-theme-primary);
+  background: color-mix(in srgb, var(--b3-theme-primary) 8%, transparent);
+}
+.tt-types__hint {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
+}
+
+/* 红色边框宽按钮：仅用于类型管理弹窗内的「重置为默认」 */
+.tt-types__reset {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 8px 0;
+  border: 1px solid color-mix(in srgb, var(--b3-theme-error, #d23f31) 65%, transparent);
+  background: transparent;
+  color: var(--b3-theme-error, #d23f31);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.tt-types__reset:hover {
+  background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 10%, transparent);
+  border-color: var(--b3-theme-error, #d23f31);
+}
+
+/* ===================== 编辑区命中反馈 ===================== */
+
+/* 已识别的「时间 类型：内容」行：可选的类型色淡底 + 底部同色细线，两者贴合同一个圆角。
+   这组规则整体由 index.js 的 _ensureMarkStyle() 动态生成，这里不再写死声明 ——
+   记录类型的属性名是 custom-<前缀>-type，前缀可由用户配置，写死在 CSS 里没法匹配。
+   JS 那边生成的选择器同时覆盖两种段落：
+     · .tt-hit            JS 即时打标，用于「刚输入、块属性还没写进库」的那一刻；
+     · [custom-…-type]    属性已在 DOM 上，靠它让下划线与文字同时出现，
+                          不必等异步扫描补标（否则刷新后会先有字、过一会儿才浮出线）。
+   范围外的段落由 JS 挂 .tt-nomark 压掉，属性不删。
+   变量都由设置驱动：--tt-c 来自块属性与类型配色，--tt-line-w 来自「下划线粗细」，
+   --tt-line 与 --tt-bg 是同一类型色的深浅两档，线色深、底色浅；
+   兜底色 #888888 与 index.js 的 DEFAULT_TYPE_COLOR 对应（类型管理里删掉的类型，
+   文档里留下的历史记录会落到这个中性灰，而不是思源主题主色）。
+   线用内阴影绘制：内阴影沿元素的圆角内缘走，底边线两端自然跟着圆角收口，与色块严丝合缝。
+   注意不要改用等高伪元素或独立元素画线，那种做法在 0.75px 高度上圆角不起作用，
+   线两端会变成直角，与圆角色块脱节。 */
+
+/* ============================================================
+ * LifeLog Dock 侧边栏视图（1:1 复刻轻语）
+ * 以下样式来自「轻语」siyuan-lumina，仅保留 Dock 相关类名
+ * ============================================================ */
+
+/* ========== LifeLog Dock 侧边栏 ========== */
+.north-luna-lifelog-dock-root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--b3-theme-background);
+}
+.north-lifelog-dock-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+.north-lifelog-dock-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 35%, transparent);
+    flex-shrink: 0;
+}
+.north-lifelog-dock-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.north-lifelog-dock-tab {
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    color: var(--b3-theme-on-surface-light);
+    cursor: pointer;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+    font-family: inherit;
+    transition: color 0.15s, background 0.15s;
+}
+.north-lifelog-dock-tab:hover {
+    color: var(--b3-theme-on-background);
+    background: var(--b3-list-hover);
+}
+.north-lifelog-dock-tab.active {
+    color: var(--b3-theme-primary);
+    background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+    font-weight: 600;
+}
+.north-lifelog-dock-refresh {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--b3-theme-on-surface);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+}
+.north-lifelog-dock-refresh:hover {
+    color: var(--b3-theme-primary);
+    background: var(--b3-list-hover);
+}
+/* 头部图标统一尺寸：跟着按钮一起放大，线宽观感更饱满 */
+.north-lifelog-dock-refresh svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
+/* Dock 内时间轴微调：面板宽度有限，稍微压缩侧边留白 */
+.north-luna-lifelog-dock-root .north-lifelog-timeline {
+    padding: 10px 16px 16px !important;
+}
+.north-luna-lifelog-dock-root .north-lifelog-timeline-left {
+    min-width: 36px;
+    max-width: 48px;
+    padding-right: 8px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-timeline-card {
+    padding: 8px 10px;
+}
+
+/* ========== LifeLog Dock 统计 ========== */
+.north-lifelog-dock-stats {
+    overflow-y: auto;
+    padding: 12px 16px 20px;
+    background: var(--b3-theme-background);
+}
+.north-lifelog-dock-stat-periods {
+    display: flex;
+    background: color-mix(in srgb, var(--b3-theme-surface) 60%, transparent);
+    border-radius: 8px;
+    padding: 2px;
+    margin-bottom: 12px;
+}
+.north-lifelog-dock-stat-period {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--b3-theme-on-surface-light);
+    padding: 6px 0;
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+.north-lifelog-dock-stat-period:hover {
+    color: var(--b3-theme-on-background);
+}
+.north-lifelog-dock-stat-period.active {
+    background: var(--b3-theme-background);
+    color: var(--b3-theme-on-background);
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.north-lifelog-dock-stat-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.north-lifelog-dock-stat-nav-btn {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--b3-theme-on-surface-light);
+    cursor: pointer;
+    border-radius: 6px;
+}
+.north-lifelog-dock-stat-nav-btn:hover:not(:disabled) {
+    color: var(--b3-theme-primary);
+    background: var(--b3-list-hover);
+}
+.north-lifelog-dock-stat-nav-label {
+    font-size: 13px;
+    color: var(--b3-theme-on-surface);
+    font-variant-numeric: tabular-nums;
+}
+.north-lifelog-dock-stat-chart {
+    background: color-mix(in srgb, var(--b3-theme-surface) 50%, transparent);
+    border-radius: 10px;
+    padding: 16px 10px 10px;
+    margin-bottom: 14px;
+}
+.north-lifelog-dock-stat-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 160px;
+}
+.north-lifelog-dock-stat-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+.north-lifelog-dock-stat-card {
+    background: color-mix(in srgb, var(--b3-theme-surface) 50%, transparent);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+.north-lifelog-dock-stat-card-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--b3-theme-on-background);
+    line-height: 1.2;
+}
+.north-lifelog-dock-stat-card-unit {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--b3-theme-on-surface-light);
+    margin-left: 2px;
+}
+.north-lifelog-dock-stat-card-label {
+    font-size: 12px;
+    color: var(--b3-theme-on-surface-light);
+    margin-top: 2px;
+}
+.north-lifelog-dock-stat-heatmap-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--b3-theme-on-background);
+    margin-bottom: 10px;
+}
+.north-lifelog-dock-stat-heatmap-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px 8px;
+}
+.north-lifelog-dock-stat-heatmap-month {
+    min-width: 0;
+}
+.north-lifelog-dock-stat-heatmap-month-title {
+    font-size: 12px;
+    color: var(--b3-theme-on-surface);
+    text-align: center;
+    margin-bottom: 6px;
+}
+.north-lifelog-dock-stat-heatmap-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+.north-lifelog-dock-stat-heatmap-cell {
+    aspect-ratio: 1;
+    background: color-mix(in srgb, var(--b3-theme-surface) 70%, transparent);
+    border-radius: 3px;
+}
+.north-lifelog-dock-stat-heatmap-cell.empty {
+    background: transparent;
+}
+.north-lifelog-dock-stat-heatmap-cell.level-1 {
+    background: color-mix(in srgb, var(--b3-theme-primary) 25%, transparent);
+}
+.north-lifelog-dock-stat-heatmap-cell.level-2 {
+    background: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
+}
+.north-lifelog-dock-stat-heatmap-cell.level-3 {
+    background: color-mix(in srgb, var(--b3-theme-primary) 70%, transparent);
+}
+.north-lifelog-dock-stat-heatmap-cell.level-4 {
+    background: var(--b3-theme-primary);
+}
+
+/* Dock 悬浮添加按钮（比主视图小一圈） */
+.north-lifelog-dock-fab {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--b3-theme-primary);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 3px 10px color-mix(in srgb, var(--b3-theme-primary) 40%, transparent);
+    transition: box-shadow 0.2s;
+    z-index: 10;
+}
+.north-lifelog-dock-fab:hover {
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+}
+
+/* Dock 紧凑模式的具体规则见文件末尾统一块 */
+
+/* Dock 内周历条微调：参考轻语，做更紧凑的样式 */
+.north-luna-lifelog-dock-root .north-lifelog-calendar-week-strip {
+    margin-top: 0;
+    padding: 8px 6px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-weekday-row {
+    gap: 0;
+    margin-bottom: 4px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-weekday-header {
+    padding: 2px 0;
+    font-size: 11px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-day-row {
+    gap: 0;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-day-cell {
+    min-height: 36px;
+    padding: 2px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-day-num {
+    font-size: 12px;
+}
+.north-luna-lifelog-dock-root .north-lifelog-calendar-day-sub {
+    font-size: 9px;
+    margin-top: 1px;
+}
+
+/* ---- 统计柱状图（north-shuoshuo-daily-bar 同款） ---- */
+
+.north-shuoshuo-daily-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    gap: 3px;
+    position: relative;
+}
+
+.north-shuoshuo-daily-bar::after {
+    content: attr(data-lumina-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--b3-theme-primary);
+    color: #fff;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s ease;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.north-shuoshuo-daily-bar:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
+
+.north-shuoshuo-daily-bar-bg {
+    width: 72%;
+    height: 140px;
+    background: color-mix(in srgb, var(--b3-theme-surface-lighter) 40%, transparent);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+}
+
+.north-shuoshuo-daily-bar-fill {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(180deg, var(--b3-theme-primary), var(--b3-theme-primary-light));
+    border-radius: 4px;
+    transition: height 0.3s ease;
+}
+
+.north-shuoshuo-daily-bar-count {
+    font-size: 11px;
+    color: var(--b3-theme-on-surface);
+    font-weight: 500;
+}
+
+.north-shuoshuo-daily-bar-label {
+    font-size: 10px;
+    color: var(--b3-theme-on-surface-light);
+    white-space: nowrap;
+}
+
+/* ---- 时间轴 + 周历基础类 ---- */
+
+/* ========== 时间轴（1:1 复刻轻语 lifelog-timeline-layout） ========== */
+.north-lifelog-timeline { flex: 1; overflow-y: auto; padding: 16px 30px 24px !important; position: relative; scrollbar-width: none; }
+.north-lifelog-timeline::-webkit-scrollbar { display: none; }
+
+/* 时间轴空状态 */
+.north-lifelog-timeline-empty { display: flex; align-items: center; justify-content: center; height: 200px; font-size: 14px; color: var(--b3-theme-on-surface-light); user-select: none; }
+
+/* 日期分组标题 */
+.north-lifelog-date-group { margin: 20px 0 12px 0; font-size: 14px; font-weight: 600; color: var(--b3-theme-primary); background: transparent; border: none; padding: 0; }
+.north-lifelog-date-group:first-child { margin-top: 0; }
+.north-lifelog-date-group:first-child { margin-top: 0; }
+
+/* 单条时间轴项目：三栏 flex 布局 */
+.north-lifelog-timeline-item { display: flex; align-items: flex-start; gap: 0; padding: 0 0 20px 0; margin: 0; background: transparent; border: none; border-radius: 0; box-shadow: none; position: relative; overflow: visible; contain: layout style; }
+.north-lifelog-timeline-item:last-child { padding-bottom: 0; }
+
+/* 左栏：时间 */
+.north-lifelog-timeline-left { min-width: 44px; max-width: 60px; flex-shrink: 0; padding-top: 9px; text-align: right; padding-right: 12px; }
+.north-lifelog-timeline-time { font-size: 14px; color: var(--b3-theme-on-surface); font-variant-numeric: tabular-nums; line-height: 1; }
+
+/* 中栏：时间轴（竖线 + 圆环节点） */
+.north-lifelog-timeline-axis { position: relative; width: 18px; flex-shrink: 0; display: flex; justify-content: center; padding-top: 12px; }
+/* 时间轴线：从圆环中心开始向下 */
+.north-lifelog-timeline-axis::before { content: ''; position: absolute; top: 17px; left: 50%; transform: translateX(-50%); width: 1.5px; height: var(--axis-height, 80px); background: color-mix(in srgb, var(--b3-border-color) 35%, transparent); }
+.north-lifelog-timeline-item:first-child .north-lifelog-timeline-axis::before { top: 17px; }
+.north-lifelog-timeline-item:last-child .north-lifelog-timeline-axis::before { height: 17px !important; }
+
+/* 空心圆环节点 */
+.north-lifelog-timeline-marker { width: 10px; height: 10px; border-radius: 50%; background: var(--b3-theme-background); border: 2px solid var(--lifelog-timeline-color, var(--b3-theme-primary)); flex-shrink: 0; position: relative; z-index: 1; box-sizing: border-box; }
+
+/* 右栏：卡片 */
+.north-lifelog-timeline-card { flex: 1; min-width: 0; margin-left: 12px; padding: 12px 14px; background: color-mix(in srgb, var(--b3-theme-surface) 35%, var(--b3-theme-background)); border: 1px solid color-mix(in srgb, var(--b3-border-color) 45%, transparent); border-radius: 10px; }
+
+/* 时间范围 */
+.north-lifelog-timeline-range { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--b3-theme-on-surface); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.north-lifelog-timeline-duration { padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--b3-border-color) 40%, transparent); color: var(--b3-theme-on-surface-light); }
+
+/* 时间轴右键菜单 */
+.north-lifelog-ctx-menu {
+    position: fixed;
+    z-index: 1000;
+    background: var(--b3-theme-surface);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    padding: 4px;
+    min-width: 140px;
+    user-select: none;
+}
+.north-lifelog-ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: var(--b3-theme-on-background);
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+}
+.north-lifelog-ctx-item:hover {
+    background: var(--b3-list-hover);
+}
+
+/* 类型文字（颜色由 --lifelog-timeline-color 驱动） */
+.north-lifelog-timeline-type { font-size: var(--lifelog-type-font-size, 13px); font-weight: 500; margin-bottom: 4px; line-height: 1.4; }
+
+/* 内容 */
+.north-lifelog-timeline-content { font-size: var(--lifelog-content-font-size, 14.5px); color: var(--b3-theme-on-surface); line-height: 1.7; word-wrap: break-word; white-space: pre-wrap; margin-top: 0; }
+
+/* ---------- 日期筛选按钮（与清风 .north-breeze-datefilter-btn 一致） ---------- */
+.north-lifelog-datefilter-btn { flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--b3-theme-background); border: 1px solid var(--b3-border-color); border-radius: 8px; color: var(--b3-theme-on-surface); cursor: pointer; transition: border-color 0.2s, color 0.2s; padding: 0; }
+.north-lifelog-datefilter-btn:hover { border-color: var(--b3-theme-primary); color: var(--b3-theme-primary); }
+.north-lifelog-datefilter-btn svg { width: 16px; height: 16px; }
+
+/* ---------- 热力图（与清风 .north-breeze-heatmap 一致） ---------- */
+.north-lifelog-heatmap { flex-shrink: 0; margin-bottom: 20px; position: relative; overflow: visible; }
+.north-lifelog-heatmap-grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(7, 1fr); gap: 4px; margin-bottom: 8px; }
+.north-lifelog-heatmap-grid-cell { width: 100%; aspect-ratio: 1; background-color: color-mix(in srgb, var(--b3-theme-surface-lighter) 40%, transparent); border-radius: 5px; cursor: pointer; position: relative; transition: all 0.2s; }
+.north-lifelog-heatmap-grid-cell.level-1 { background-color: var(--breeze-heat-1, var(--b3-theme-primary-lightest)); }
+.north-lifelog-heatmap-grid-cell.level-2 { background-color: var(--breeze-heat-2, var(--b3-theme-primary-lighter)); }
+.north-lifelog-heatmap-grid-cell.level-3 { background-color: var(--breeze-heat-3, var(--b3-theme-primary-light)); }
+.north-lifelog-heatmap-grid-cell.level-4 { background-color: var(--breeze-heat-4, var(--b3-theme-primary)); }
+.north-lifelog-heatmap-grid-cell:hover { transform: scale(1.1); box-shadow: 0 0 0 2px var(--b3-theme-primary-lighter); }
+.north-lifelog-heatmap-grid-cell.selected { transform: scale(1.12); box-shadow: 0 0 0 1px var(--b3-theme-primary); }
+.north-lifelog-global-tooltip { user-select: none; -webkit-user-select: none; }
+.north-lifelog-heatmap-months { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; margin-top: 6px; font-size: 11px; color: var(--b3-theme-on-surface-light); }
+.north-lifelog-heatmap-months span { text-align: left; white-space: nowrap; }
+
+/* ---------- 菜单（与清风 .north-breeze-menu 一致） ---------- */
+.north-lifelog-menu { margin-bottom: 10px; flex-shrink: 0; }
+.north-lifelog-menu-item { display: flex; align-items: center; padding: 7px 12px; border-radius: 8px; margin-bottom: 4px; cursor: pointer; transition: all 0.2s; color: var(--b3-theme-on-surface); font-size: 14px; }
+.north-lifelog-menu-item:hover { background-color: var(--b3-list-hover); }
+.north-lifelog-menu-item.active { background-color: var(--b3-theme-primary); color: var(--b3-theme-on-primary); }
+.north-lifelog-menu-icon { width: 18px; height: 18px; margin-right: 8px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.north-lifelog-menu-icon-svg { width: 18px; height: 18px; }
+.north-lifelog-menu-text { font-weight: 500; }
+
+/* ---------- 顶部周历条 ---------- */
+/* max-height 与 margin-top 做过渡：展开与收起时高度平滑变化，
+   具体起止值由 index.js 的 _renderLifeLogDockCalendar 在过渡期间以内联 max-height 给出。
+   margin-top 也一起过渡，免得展开瞬间顶部间距先跳 4px。 */
+.north-lifelog-calendar-week-strip { margin-top: 12px; padding: 10px 2px; margin-bottom: 0; background: var(--b3-theme-background); border-radius: 12px; flex-shrink: 0; transition: max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1), margin-top 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.north-lifelog-calendar-weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; margin-bottom: 4px; }
+.north-lifelog-calendar-weekday-header { text-align: center; font-size: 12px; color: var(--b3-theme-on-surface-light); padding: 2px 0; }
+.north-lifelog-calendar-day-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; }
+.north-lifelog-calendar-day-cell { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 44px; padding: 2px; border-radius: 8px; color: var(--b3-theme-on-surface); cursor: pointer; transition: background 0.15s ease; }
+.north-lifelog-calendar-day-cell:hover { background: color-mix(in srgb, var(--b3-theme-surface) 70%, transparent); }
+.north-lifelog-calendar-day-cell.weekend { color: #d32f2f; }
+.north-lifelog-calendar-day-cell.today { background: var(--b3-theme-primary); box-shadow: none; border: none; }
+.north-lifelog-calendar-day-cell.today .north-lifelog-calendar-day-num, .north-lifelog-calendar-day-cell.today .north-lifelog-calendar-day-sub { color: var(--b3-theme-background); font-weight: 600; }
+.north-lifelog-calendar-day-cell.selected:not(.today) { background: var(--b3-theme-primary-lightest); color: var(--b3-theme-primary); font-weight: 500; }
+.north-lifelog-calendar-day-num { font-size: 14px; font-weight: 500; }
+.north-lifelog-calendar-day-sub { font-size: 10px; color: var(--b3-theme-on-surface-light); text-align: center; line-height: 1.2; margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.north-lifelog-calendar-day-cell.today .north-lifelog-calendar-day-sub { color: var(--b3-theme-background); }
+.north-lifelog-calendar-day-cell.weekend.today .north-lifelog-calendar-day-num { color: var(--b3-theme-background); }
+.north-lifelog-calendar-day-cell.weekend.today .north-lifelog-calendar-day-sub { color: var(--b3-theme-background); }
+
+/* ---------- 日历区顶栏：左侧年月与周序号，右侧导航按钮 ---------- */
+.north-lifelog-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 4px 6px; min-height: 24px; }
+.north-lifelog-cal-caption { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.north-lifelog-cal-title { font-size: 14px; font-weight: 600; color: var(--b3-theme-on-background); white-space: nowrap; }
+.north-lifelog-cal-week { font-size: 12px; color: var(--b3-theme-on-surface-light); white-space: nowrap; }
+.north-lifelog-cal-nav { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.north-lifelog-cal-toggle, .north-lifelog-cal-navbtn { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; padding: 0; border: none; background: transparent; color: var(--b3-theme-on-surface-light); cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s; }
+.north-lifelog-cal-toggle:hover, .north-lifelog-cal-navbtn:hover { color: var(--b3-theme-primary); background: var(--b3-list-hover); }
+
+/* ---------- 月历网格（展开态） ---------- */
+/* 展开时日历会占掉不少高度，给一个最大高度兜底，避免把下面的时间轴挤没 */
+.north-lifelog-calendar-week-strip.is-expanded { margin-top: 8px; padding: 8px 4px 10px; max-height: 62vh; overflow-y: auto; scrollbar-width: none; }
+.north-lifelog-calendar-week-strip.is-expanded::-webkit-scrollbar { display: none; }
+/* 过渡期间高度由脚本用内联 max-height 接管，必须裁掉溢出，
+   否则新内容会先整块溢出来再被压回去，看起来是闪一下而不是展开。
+   这条要写在 .is-expanded 之后，否则 overflow-y 会被上面那条覆盖。 */
+.north-lifelog-calendar-week-strip.is-animating { overflow: hidden; }
+.north-lifelog-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px 0; }
+.north-lifelog-cal-day { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 3px 1px 1px; border-radius: 8px; cursor: pointer; color: var(--b3-theme-on-surface); transition: background 0.15s ease; }
+.north-lifelog-cal-day:hover { background: color-mix(in srgb, var(--b3-theme-surface) 70%, transparent); }
+.north-lifelog-cal-day.other-month { opacity: 0.35; }
+.north-lifelog-cal-day.weekend .north-lifelog-cal-num { color: #d32f2f; }
+.north-lifelog-cal-num { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; line-height: 1; border-radius: 50%; }
+.north-lifelog-cal-day.today .north-lifelog-cal-num { background: var(--b3-theme-primary); color: var(--b3-theme-background); font-weight: 600; }
+.north-lifelog-cal-day.selected:not(.today) .north-lifelog-cal-num { background: var(--b3-theme-primary-lightest); color: var(--b3-theme-primary); }
+.north-lifelog-cal-sub { font-size: 10px; line-height: 1.2; margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--b3-theme-on-surface-light); }
+/* 节日与节气用暖色强调，与农历日区分开 */
+.north-lifelog-cal-sub.is-festival { color: #e8850c; }
+.north-lifelog-cal-dots { display: flex; align-items: center; gap: 2px; height: 5px; margin-top: 1px; }
+.north-lifelog-cal-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--tt-dot, var(--b3-theme-primary)); }
+
+/* ---- 类型选择弹层 + 输入弹窗 ---- */
+
+/* ========== LifeLog 类型选择面板 ========== */
+.north-lifelog-pick-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.north-lifelog-pick-bg {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    backdrop-filter: blur(3px);
+}
+.north-lifelog-pick-panel {
+    position: relative;
+    background: var(--b3-theme-surface);
+    border-radius: 14px;
+    padding: 20px 16px 14px;
+    width: calc(100% - 48px);
+    max-width: 340px;
+    max-height: 60vh;
+    overflow-y: auto;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    z-index: 1;
+}
+.north-lifelog-pick-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--b3-theme-on-background);
+    margin-bottom: 14px;
+}
+.north-lifelog-pick-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.north-lifelog-pick-type-chip {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--b3-theme-surface-lighter) 50%, transparent);
+    color: var(--b3-theme-on-surface);
+    transition: background 0.15s, color 0.15s;
+}
+.north-lifelog-pick-type-chip[style] {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.north-lifelog-pick-close {
+    display: block;
+    width: 100%;
+    padding: 8px 0;
+    border: 1px solid var(--b3-border-color);
+    background: transparent;
+    color: var(--b3-theme-on-surface-light);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+}
+.north-lifelog-pick-close:hover {
+    background: var(--b3-list-hover);
+}
+
+/* ========== LifeLog 输入弹窗 ========== */
+.north-lifelog-input-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.north-lifelog-input-modal-bg {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    backdrop-filter: blur(3px);
+}
+.north-lifelog-input-modal-body {
+    position: relative;
+    background: var(--b3-theme-surface);
+    border-radius: 14px;
+    padding: 20px 20px 16px;
+    width: calc(100% - 48px);
+    max-width: 420px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    z-index: 1;
+}
+.north-lifelog-input-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.north-lifelog-input-modal-type {
+    font-size: 16px;
+    font-weight: 600;
+}
+.north-lifelog-input-modal-time {
+    font-size: 13px;
+    color: var(--b3-theme-on-surface-light);
+}
+.north-lifelog-input-modal-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--b3-theme-background);
+    border: 1px solid var(--b3-border-color);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-family: inherit;
+    color: var(--b3-theme-on-background);
+    resize: none;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.north-lifelog-input-modal-textarea:focus {
+    border-color: var(--b3-theme-primary);
+    box-shadow: 0 0 0 2px var(--b3-theme-primary-lightest);
+}
+.north-lifelog-input-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 14px;
+}
+.north-lifelog-input-modal-back {
+    margin-right: auto;
+    padding: 7px 14px;
+    border: 1px solid var(--b3-border-color);
+    background: transparent;
+    color: var(--b3-theme-on-surface-light);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.north-lifelog-input-modal-back:hover {
+    background: var(--b3-list-hover);
+}
+.north-lifelog-input-modal-cancel {
+    padding: 7px 16px;
+    border: 1px solid var(--b3-border-color);
+    background: transparent;
+    color: var(--b3-theme-on-surface);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.north-lifelog-input-modal-cancel:hover {
+    background: var(--b3-list-hover);
+}
+.north-lifelog-input-modal-submit {
+    padding: 7px 20px;
+    border: none;
+    background: var(--b3-theme-primary);
+    color: #fff;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.north-lifelog-input-modal-submit:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+/* ===================== 时迹补充覆盖 ===================== */
+
+/* Dock 根容器作为 FAB / 弹层的定位锚点 */
+.north-luna-lifelog-dock-root {
+  position: relative;
+  min-height: 0;
+}
+
+/* 头部右侧工具按钮组（设置 + 刷新） */
+.north-lifelog-dock-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ===================== Dock 紧凑模式（最终覆盖） =====================
+   由 index.js 的 _applyDockCompact() 在 dock 根元素上切换
+   .north-lifelog-dock-compact，前提是根元素同时带
+   .north-luna-lifelog-dock-root（_renderLifeLogDockContent 已加上）。
+
+   选择器统一写满 3 个类，原因是前面存在多条
+   `.north-luna-lifelog-dock-root .north-lifelog-xxx`（2 个类）的覆盖规则，
+   例如 977 行的 day-cell { min-height: 36px } 与 962 行的周历条 padding，
+   它们出现得更晚，2 个类的紧凑规则会被直接压掉。
+   基础规则里带 !important 的（时间轴 padding），这里同样保留 !important。 */
+
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-header {
+  padding: 6px 12px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-tab {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-refresh {
+  width: 28px;
+  height: 28px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-refresh svg {
+  width: 18px;
+  height: 18px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-calendar-week-strip {
+  margin-top: 0;
+  padding: 4px 6px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-calendar-weekday-row {
+  margin-bottom: 2px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-calendar-day-cell {
+  min-height: 28px;
+  padding: 1px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-timeline {
+  padding: 6px 12px 12px !important;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-date-group {
+  margin: 10px 0 6px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-timeline-item {
+  padding-bottom: 10px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-timeline-card {
+  padding: 7px 10px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-stats {
+  padding: 8px 12px 16px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-fab {
+  bottom: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+}
+/* 紧凑模式下的月历：数字圆与行高一起收一档，尽量少占高度 */
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-cal-day {
+  padding: 2px 1px 0;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-cal-num {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-cal-sub {
+  font-size: 9px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-cal-dots {
+  height: 4px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-cal-dot {
+  width: 3px;
+  height: 3px;
+}
+
+/* ===================== Dock 悬浮提示（替代原生 title） =====================
+   由 index.js 的 _bindDockTooltip() 创建，挂在 body 上做 fixed 定位 ——
+   日历在 Dock 顶部，若把气泡留在 Dock 内，向上的气泡会被祖先容器的
+   overflow 裁掉。元素只要带 data-tip 属性就会触发，日历重渲染后无需重新绑定。
+   白色卡片式气泡：白底 + 淡边 + 深字，跟思源的整体风格一致。
+   气泡不跟随记录的类型色 —— 类型信息由格子里的色条承担，
+   气泡只负责把完整的一行读清楚。 */
+
+.north-lifelog-tip {
+  position: fixed;
+  z-index: 200;
+  box-sizing: border-box;
+  max-width: min(280px, 60vw);
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  border: 1px solid var(--b3-border-color);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 必须屏蔽指针事件：否则鼠标移到气泡上会反复触发 mouseout / mouseover */
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.north-lifelog-tip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ===================== 日历标签页（思源主区域的 tab） =====================
+   由 index.js 的 _renderCalendarTab / _paintCalendarTab 渲染，
+   容器是思源注入的 tab element（同时带 .north-timetrail-caltab）。
+   宽度远大于 Dock 侧栏，所以格子里直接铺当天的记录条目。
+   工具栏（左年月 / 右段位 + 翻月分组）+ 星期表头 + 固定 6 行网格。 */
+
+.north-timetrail-caltab {
+  /* 网格线的颜色：思源边框色再降一半透明度，线更轻。
+     想整体调深浅只改这一处即可（表头分隔线与格子边线共用）。 */
+  --tt-cal-line: color-mix(in srgb, var(--b3-border-color) 50%, transparent);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 16px 20px 20px;
+  background: var(--b3-theme-background);
+  overflow-y: auto;
+}
+
+/* 工具栏：左年月标题、右侧「段位 + 翻月分组」。
+   中间不放假东西 —— 靠段位上的 margin-left: auto 把右侧那一串整体推到最右，
+   自适应的空白就落在标题和段位之间。 */
+.north-caltab-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+/* 段位控件：灰底 pill 容器，选中那项白底 + 微阴影凸起。
+   margin-left: auto 是「右侧整串靠右」的唯一开关，删掉它这组就回到左边。 */
+.north-caltab-segments {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--b3-theme-surface);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.north-caltab-segments button {
+  height: 26px;
+  min-width: 36px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-segments button:hover {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-segments button.active {
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* 类型筛选：与段位控件同款的灰底 pill，点开是勾选面板。
+   放在段位与翻页之间，跟着右侧那一串走（靠右由 .north-caltab-segments 的 margin-left:auto 负责）。 */
+.north-caltab-types {
+  position: relative;
+  flex: 0 0 auto;
+}
+.north-caltab-typebtn {
+  height: 26px;
+  max-width: 140px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-typebtn:hover {
+  color: var(--b3-theme-on-background);
+}
+/* 有筛选或面板开着时高亮，一眼能看出「当前不是全部类型」 */
+.north-caltab-typebtn.active {
+  color: var(--b3-theme-primary);
+}
+.north-caltab-typemenu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 150px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+.north-caltab-typemenu.open {
+  display: block;
+}
+.north-caltab-typeopt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-typeopt:hover {
+  background: var(--b3-list-hover, rgba(0, 0, 0, 0.04));
+}
+.north-caltab-typeopt.on {
+  color: var(--b3-theme-primary);
+}
+/* 色标与类型管理里的色块同形状（小方角），别用圆形 —— 那是另一套视觉语言 */
+.north-caltab-typedot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.north-caltab-typedot-all {
+  background: linear-gradient(135deg, #f87171, #fbbf24, #34d399, #60a5fa);
+}
+
+/* 翻月 + 今天：合成一组分段控件 —— 左右箭头夹住「今天」，格子之间一条竖分隔线。
+   只有一个外边框，所以三个格子看起来是一整块，而不是三个独立按钮。 */
+.north-caltab-navgroup {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--b3-theme-background);
+  box-sizing: border-box;
+  flex: 0 0 auto;
+}
+.north-caltab-navgroup button {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+/* 分隔线挂在后一个格子的左边，高度自动占满整组，不用另外画。
+   颜色用网格线那支「轻线」变量（边框色 50%），比外框淡一半 ——
+   外框是轮廓、竖线只是暗示分组，两者不该一样重。 */
+.north-caltab-navgroup button + button {
+  border-left: 1px solid var(--tt-cal-line);
+}
+.north-caltab-navgroup button:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+/* 左右箭头：正方形格子，不参与拉伸 */
+.north-caltab-navgroup .north-caltab-navbtn {
+  width: 28px;
+  flex: 0 0 auto;
+}
+/* 中间「今天」：比箭头宽一些，颜色更实，让它在中间站得住 */
+.north-caltab-navgroup .north-caltab-today-btn {
+  min-width: 60px;
+  padding: 0 16px;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-navgroup .north-caltab-today-btn:hover {
+  color: var(--b3-theme-primary);
+}
+
+/* 工具：刷新 + 设置，与翻页组同款外框，两个图标之间一条竖分隔线。
+   放在整串最右（段位控件的 margin-left:auto 把前面那串都推到右边，本组自然在最末端）。 */
+.north-caltab-tools {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--b3-theme-background);
+  box-sizing: border-box;
+  flex: 0 0 auto;
+}
+.north-caltab-tools button {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+/* 两个图标之间一条竖分隔线，颜色与翻页组一致（边框色 50% 的轻线） */
+.north-caltab-tools button + button {
+  border-left: 1px solid var(--tt-cal-line);
+}
+.north-caltab-tools button:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+
+/* 年月标题：坐在工具栏最左，与下方星期表头 / 日历网格的左缘对齐。
+   不参与拉伸，宽度就是文字本身，所以位置固定、不会随窗口宽度漂。
+   翻月 / 滚动跨月时由 JS 的 _updateCalendarTitle() 改这里的内容。 */
+.north-caltab-title {
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+  white-space: nowrap;
+}
+
+/* 列宽必须与网格一致（gap 也是 0），否则表头会和下面格子错位 */
+.north-caltab-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--tt-cal-line);
+  flex-shrink: 0;
+}
+.north-caltab-week span {
+  text-align: center;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 滚动区：上 / 中 / 下三个月垂直堆叠，交给浏览器原生滚动 ——
+   滚轮滚多少、内容就走多少，能停在半个月的位置，完全跟手。
+   overscroll-behavior 防止滚到头时带动外层页面；滚动条隐藏，更像日历应用。 */
+.north-caltab-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.north-caltab-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 每个月正好占满一屏：滚一屏 = 翻一个月。
+   overflow 兜住内容，避免个别格子撑高把「一屏 = 一月」的对应关系弄乱。 */
+.north-caltab-month {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 连续表格：格子之间不留空隙，线条画在每个格子自己的右边与下边。
+   比「缝隙透底色」稳 —— 0.5px 的 gap 在部分缩放 / 屏幕下会被舍入成 0，线就断了。
+   行高用 1fr 随月块平分，不写死像素：月块高度等于一屏，6 行自然铺满。 */
+.north-caltab-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 0;
+  height: 100%;
+}
+
+.north-caltab-day {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 8px 8px;
+  border-right: 1px solid var(--tt-cal-line);
+  border-bottom: 1px solid var(--tt-cal-line);
+  overflow: hidden;
+}
+/* 最右一列不画右边线：整片日历右侧不封口（对齐参考图）。
+   但**最后一行保留**下边线 —— 连续滚动时那条线正是两个月份之间的分隔。
+   另外不做 hover 变色：格子只负责排版，鼠标划过不该有反馈。 */
+.north-caltab-day:nth-child(7n) {
+  border-right: none;
+}
+/* 跨月只淡化内容，不动格子本身 —— 否则格子背景与网格线会跟着淡，细线就不匀了 */
+.north-caltab-day.other-month .north-caltab-num,
+.north-caltab-day.other-month .north-caltab-sub,
+.north-caltab-day.other-month .north-caltab-items {
+  opacity: 0.45;
+}
+/* 今天只把日期数字套个色块（对齐参考图），不整格铺色 —— 整格铺色会和类型色块抢视觉。
+   形状是圆角方块（squircle 观感），不是正圆：参考图里徽标 30×30、圆角约 8px，
+   圆角/边长 ≈ 0.27，换算到这里的 22px 就是 6px。想整体调圆钝只改这一处。
+   数字 14px 是照参考图反推的（数字高占徽标 0.467），跟 22px 正好成比例，别乱动。
+   **月视图的格子与周视图的表头共用这一条**，两个视图的今天才长得一样；
+   周视图表头里不需要月视图那套负 margin，另有一步覆盖（见周视图那一段）。 */
+.north-caltab-day.today .north-caltab-num,
+.north-caltab-wv-dayname.today .north-caltab-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  margin: -2px 0 -2px -3px;
+  border-radius: 6px;
+  background: var(--b3-theme-primary);
+  color: var(--b3-theme-background);
+}
+
+.north-caltab-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.north-caltab-num {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+
+.north-caltab-sub {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 副标题按性质分色：节日红、节气绿，普通农历保持灰（对齐参考图的区分） */
+.north-caltab-sub.kind-holiday {
+  color: var(--b3-theme-error, #d23f31);
+}
+.north-caltab-sub.kind-term {
+  color: #1d9e75;
+}
+[data-theme-mode="dark"] .north-caltab-sub.kind-term {
+  color: #5dcaa5;
+}
+
+/* 当天记录条目：只显示内容，整块铺类型色（参考图里的日程块样式）。
+   色值来自 --tt-c（index.js 按记录类型写入）。浅底 + 深字在任何主题下都可读，
+   所以不必再写暗色主题分支。 */
+.north-caltab-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 记录条目：左侧一条短色条 + 极淡同色底，走「胶囊」而不是实心色块 ——
+   一格里铺好几条才不会显得笨重（对齐参考图的观感）。
+   色条用绝对定位的伪元素，文字才能正常走 ellipsis。
+   行高压到 1.5：一格里要装下 5 条，太松了放不下。 */
+.north-caltab-item {
+  position: relative;
+  min-width: 0;
+  padding: 1px 8px 1px 13px;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 14%,
+    transparent
+  );
+  color: var(--b3-theme-on-background);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.north-caltab-item::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  width: 3px;
+  height: 11px;
+  margin-top: -5.5px;
+  border-radius: 2px;
+  background: var(--tt-c, #888888);
+}
+
+/* 最后一条与 +N 同一行：条目吃掉剩余宽度，徽标固定不缩 */
+.north-caltab-lastrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.north-caltab-lastrow .north-caltab-item {
+  flex: 1;
+  min-width: 0;
+}
+
+/* +N 徽标：贴在最后一条右侧，不单独占一行 */
+.north-caltab-more {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--b3-theme-on-surface) 9%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-more:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+
+/* ===== 时间轴视图（周 / 三日 / 日共用）：左时间刻度 + N 天列，记录按时间比例摆成块 =====
+   小时高度由 JS 内联写成 --tt-wv-hour、列数写成 --tt-wv-cols（都写在
+   .north-caltab-weekview 上，这里给 40px / 7 兜底），列高、小时间隔、网格列数
+   统统读它们 —— 尺寸只有 JS 一个来源，三个视图因此不会各长一套。
+   列数 7 / 3 / 1 都只是同一套样式换个数字，没有分支。 */
+.north-caltab-weekview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 左侧刻度列宽：表头和正文共用同一值，两边的竖线才对得上 */
+  --tt-wv-gutter: 52px;
+}
+
+/* 表头：与正文同列宽。它在滚动容器之外，所以正文滚动时它固定不动 */
+.north-caltab-wv-head {
+  display: grid;
+  grid-template-columns: var(--tt-wv-gutter) repeat(var(--tt-wv-cols, 7), minmax(0, 1fr));
+  gap: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--tt-cal-line);
+  flex-shrink: 0;
+}
+/* 表头第一格是刻度列的位置：留空，但要和正文一样画右边界，竖线才能连上去 */
+.north-caltab-wv-headgap {
+  border-right: 1px solid var(--tt-cal-line);
+}
+.north-caltab-wv-dayname {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 今天那一列的表头文字加重，和徽标一起把「今天」点出来 */
+.north-caltab-wv-dayname.today {
+  color: var(--b3-theme-on-background);
+}
+/* 徽标本体来自上面那条共用规则（和月视图同一份）。这里只把月视图专用的
+   负 margin 归零 —— 那是给格子里的排版留的，放在表头会把徽标顶偏。 */
+.north-caltab-wv-dayname.today .north-caltab-num {
+  margin: 0;
+}
+
+/* 正文：一个网格，第一列刻度、后面 N 列一天（N 由 --tt-wv-cols 决定）。
+   滚动条隐藏：留着会占掉宽度，正文就比表头窄一条滚动条，竖线当场错位。 */
+.north-caltab-wv-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  display: grid;
+  grid-template-columns: var(--tt-wv-gutter) repeat(var(--tt-wv-cols, 7), minmax(0, 1fr));
+  gap: 0;
+  align-content: start;
+}
+.north-caltab-wv-body::-webkit-scrollbar {
+  display: none;
+}
+
+/* 刻度列：24 个小时标签，绝对定位贴在各自那条小时线下方 */
+.north-caltab-wv-gutter {
+  position: relative;
+  height: calc(var(--tt-wv-hour, 40px) * 24);
+  border-right: 1px solid var(--tt-cal-line);
+}
+.north-caltab-wv-hour {
+  position: absolute;
+  right: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 一天一列。小时线用 background-size 平铺，不逐个画 div（7 列 × 24 条太多）。
+   平铺整体上移 1px（background-position: 0 -1px）：这样第一格的那条线被裁到画面外，
+   **顶上那条横线只由表头的 border-bottom 提供**。不移的话两条 1px 线上下紧挨着，
+   会叠成一条 2px 的粗线，一眼就看出来跟别的小时线不一样粗。
+   可视的小时线因此落在 39 / 79 / …/ 919px（比标称位置高 1px，肉眼无感）。
+   overflow 兜住 23:30 之后会溢出底边的事件块。 */
+.north-caltab-wv-col {
+  position: relative;
+  min-width: 0;
+  height: calc(var(--tt-wv-hour, 40px) * 24);
+  overflow: hidden;
+  border-right: 1px solid var(--tt-cal-line);
+  background-image: linear-gradient(to bottom, var(--tt-cal-line) 0 1px, transparent 1px);
+  background-size: 100% var(--tt-wv-hour, 40px);
+  background-position: 0 -1px;
+  background-repeat: repeat-y;
+}
+/* 最右一列不画右边线：整片日历右侧不封口（与月视图一致） */
+.north-caltab-wv-col:last-child {
+  border-right: none;
+}
+
+/* 事件块：沿用月视图条目那套观感 —— 左侧一条短色条 + 同色极淡底，
+   色值来自 --tt-c（index.js 按记录类型写入）。top / height 由 JS 算好内联，
+   因为高度还要反过来决定「时间那行放不放得下」。 */
+.north-caltab-wv-event {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  padding: 2px 6px 2px 12px;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 14%,
+    transparent
+  );
+  color: var(--b3-theme-on-background);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+/* 色条跟着块高走（上下各留 4px），块被压到最矮时也不会溢出 */
+.north-caltab-wv-event::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--tt-c, #888888);
+}
+.north-caltab-wv-event-title {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.north-caltab-wv-event-time {
+  display: block;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* 矮块（当天末条基本都是）：两行放不下，改成时间 + 标题挤在同一行。
+   时间在前 —— 它短且固定，不会被裁；要裁就裁标题，完整记录还有悬停气泡兜着。 */
+.north-caltab-wv-event.is-compact .north-caltab-wv-event-title,
+.north-caltab-wv-event.is-compact .north-caltab-wv-event-time {
+  display: inline;
+}
+.north-caltab-wv-event.is-compact .north-caltab-wv-event-time {
+  margin-right: 5px;
+}
+
+/* ===== 当天记录弹窗：点格子弹出完整列表 ===== */
+.north-caltab-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.north-caltab-modal-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.16);
+}
+.north-caltab-modal-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 82vw);
+  max-height: 68vh;
+  padding: 14px 16px 16px;
+  border-radius: 12px;
+  background: var(--b3-theme-surface);
+  border: 0.5px solid var(--b3-border-color);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+.north-caltab-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.north-caltab-modal-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-modal-close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-modal-close:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 弹窗里空间够，长内容直接换行，不再截断 */
+.north-caltab-modal-item {
+  position: relative;
+  padding: 4px 10px 4px 15px;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 14%,
+    transparent
+  );
+  color: var(--b3-theme-on-background);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.north-caltab-modal-item::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  width: 3px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 2px;
+  background: var(--tt-c, #888888);
+}
+.north-caltab-modal-empty {
+  padding: 12px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* ===== 修改记录弹窗（右键弹出） =====
+   遮罩 / 卡片 / 头部复用当天列表弹窗那套（.north-caltab-modal-*），
+   只补表单和按钮这四块。 */
+.north-caltab-edit {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.north-caltab-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.north-caltab-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.north-caltab-edit-row span {
+  flex-shrink: 0;
+  width: 36px;
+  font-size: 13px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 13px;
+  outline: none;
+}
+.north-caltab-edit-input:focus {
+  border-color: var(--b3-theme-primary);
+}
+/* textarea 跟 input 共用 .north-caltab-edit-input，但行高和最小高度不一样。
+   resize 允许纵向拉长（内容特别长时），横向锁死避免把弹窗撑变形。 */
+textarea.north-caltab-edit-input {
+  min-height: 64px;
+  line-height: 1.5;
+  resize: vertical;
+  font-family: inherit;
+}
+.north-caltab-edit-row-textarea {
+  align-items: flex-start;
+}
+.north-caltab-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.north-caltab-edit-btn {
+  padding: 5px 16px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 13px;
+  cursor: pointer;
+}
+.north-caltab-edit-btn:hover {
+  background: var(--b3-list-hover);
+}
+.north-caltab-edit-btn.primary {
+  border-color: transparent;
+  background: var(--b3-theme-primary);
+  color: var(--b3-theme-on-primary, #fff);
+}
+.north-caltab-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ===== 条目可点击（点了跳到对应文档） =====
+   三处同类条目 —— 月视图的胶囊、时间轴的事件块、当天弹窗的列表项 ——
+   都走同一套「指针 + hover 加深」反馈，不再各写一份。
+   hover 是拿同一支 --tt-c 把底色从 14% 加到 22%，跟原本的观感是连续的，
+   不是换一套色；所以浅色深色主题下都成立，不用再写暗色分支。
+   注意：格子本身（.north-caltab-day）仍然不做 hover —— 它只负责排版。 */
+.north-caltab-item,
+.north-caltab-wv-event,
+.north-caltab-modal-item {
+  cursor: pointer;
+}
+.north-caltab-item:hover,
+.north-caltab-wv-event:hover,
+.north-caltab-modal-item:hover {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 22%,
+    transparent
+  );
+}

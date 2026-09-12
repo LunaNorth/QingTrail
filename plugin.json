@@ -1,0 +1,26 @@
+{
+    "name": "QingTrail",
+    "author": "LunaNorth",
+    "url": "https://github.com/LunaNorth/QingTrail",
+    "version": "1.0.0",
+    "minAppVersion": "3.3.3",
+    "disabledInPublish": true,
+    "backends": ["all"],
+    "frontends": ["desktop"],
+    "displayName": {
+        "default": "QingTrail",
+        "zh_CN": "轻迹"
+    },
+    "description": {
+        "default": "SiYuan Note · time-tracking visualization plugin",
+        "zh_CN": "思源笔记 · 时间记录可视化插件"
+    },
+    "readme": {
+        "default": "README.md",
+        "zh_CN": "README.md"
+    },
+    "keywords": ["轻迹", "时间记录", "可视化"],
+    "funding": {
+        "custom": []
+    }
+}
