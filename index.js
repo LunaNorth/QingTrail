@@ -8,7 +8,7 @@
     openTab,
   } = require("siyuan");
 
-  const NAME = "时迹";
+  const NAME = "轻迹";
   const DATA_KEY = "settings";
   const DOCK_TYPE = "TimeTrailDock";
   /* 日历标签页：addTab 注册用的类型名；openTab 时以 name + 该值作为 custom.id */
@@ -1524,7 +1524,7 @@
      * LifeLog Dock 侧边栏视图（1:1 复刻「轻语」）
      * - 页签：记录 / 统计；右侧工具：刷新
      * - 记录视图：周历条（本周）+ 时间轴 + 悬浮添加按钮
-     * - 数据源：custom-<前缀>-* 块属性（时迹自己的打标体系，前缀可在设置中自定义）
+     * - 数据源：custom-<前缀>-* 块属性（轻迹自己的打标体系，前缀可在设置中自定义）
      * ============================================================ */
 
     /* 主题模式（明 / 暗），决定类型颜色文本钳制 */
@@ -4810,8 +4810,8 @@
       const total = tagged + unchanged + failed;
       const summary =
         total === 0
-          ? `时迹：记录范围内未发现符合「时间 类型：内容」的记录`
-          : `时迹：处理 ${total} 条记录，新增 ${tagged} 条，已最新 ${unchanged} 条` +
+          ? `轻迹：记录范围内未发现符合「时间 类型：内容」的记录`
+          : `轻迹：处理 ${total} 条记录，新增 ${tagged} 条，已最新 ${unchanged} 条` +
             (failed > 0 ? `，失败 ${failed} 条` : "");
       showMessage(summary);
     }
