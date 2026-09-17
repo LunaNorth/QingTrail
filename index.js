@@ -11,6 +11,20 @@
   const NAME = "轻迹";
   const DATA_KEY = "settings";
   const DOCK_TYPE = "TimeTrailDock";
+  /* 侧栏 Dock 的标题。它同时出现在两个地方：侧栏面板的标题、设置 → 快捷键里的条目名。
+     坑：思源会把这份标题存进工作空间的本地存储（data/storage/local.json 的
+     local-plugin-docks），之后**一直拿存档覆盖插件里的值** —— 所以光改这个常量，
+     老用户界面上一辈子显示旧名（轻迹曾经叫「时迹」，就是这么被冻住的）。
+     配套的 _syncDockMeta() 会在注册 Dock 之前把存档里的旧标题校正过来。 */
+  const DOCK_TITLE = NAME;
+  /* 两个快捷键，各管各的（记号跟思源默认键位同一套：⌘ = Ctrl、⌥ = Alt，
+     Windows 上显示成 Ctrl+Alt+X）：
+       TAB_HOTKEY  —— 「打开轻迹」命令：唤出 / 聚焦日历标签页，也就是主区域那个 tab；
+       DOCK_HOTKEY —— 侧栏面板本体：展开 / 收起那个面板。
+     为什么必须分成两条两个键：Dock 的快捷键语义固定是「开关这个面板」，
+     唤不出标签页；命令反过来也开不了面板。两个都要，就只能各挂各的。 */
+  const TAB_HOTKEY = "⌥⌘N";
+  const DOCK_HOTKEY = "⌥⌘O";
   /* 日历标签页：addTab 注册用的类型名；openTab 时以 name + 该值作为 custom.id */
   const CAL_TAB_TYPE = "TimeTrailCalendar";
 
@@ -622,13 +636,16 @@
       /* 生成「块属性 到 --tt-c」的样式映射 */
       this._ensureMarkStyle();
 
+      /* Ctrl+Alt+N：打开（已开着则聚焦到）日历标签页，跟顶栏那枚日历图标同一个入口。
+         为什么用命令而不是 Dock 的 hotkey —— Dock 的快捷键语义固定是「开关那个侧栏面板」，
+         唤不出主区域的标签页，所以这个键只能走 addCommand；
+         面板自己那个键（Ctrl+Alt+O）在下面 addDock 的 config 里。
+         原先这里还注册过「打开今日日记」「扫描并打标」，已撤掉；
+         对应实现 _openDailyNote / scanAndTag 仍留在类里，需要时再加回来即可。 */
       this.addCommand({
-        langKey: "打开今日日记",
-        callback: () => this._openDailyNote(),
-      });
-      this.addCommand({
-        langKey: "扫描并打标",
-        callback: () => this.scanAndTag(),
+        langKey: "打开轻迹",
+        hotkey: TAB_HOTKEY,
+        callback: () => this._openCalendarTab(),
       });
 
       /* 日历标签页：注册 tab 类型。
@@ -647,14 +664,22 @@
       });
 
       /* 侧栏 Dock：1:1 复刻「轻语」LifeLog 侧边栏视图
-         （记录 / 统计页签 + 周历筛选 + 时间轴 + 悬浮添加 + 类型选择弹层） */
+         （记录 / 统计页签 + 周历筛选 + 时间轴 + 悬浮添加 + 类型选择弹层）。
+         注册之前先把存档里的标题 / 快捷键校正过来 —— addDock 一跑，config
+         就被存档整份覆盖了，那时候再改就晚了。 */
+      this._syncDockMeta();
       this.dock = this.addDock({
         type: DOCK_TYPE,
         config: {
           position: "RightBottom",
           size: { width: 820, height: 0 },
           icon: "iconSpreadEven",
-          title: NAME,
+          /* 标题与快捷键都走常量；存档里的旧值由 _syncDockMeta() 在注册前校正，
+             否则这里写什么都会被本地存储里的历史配置盖掉。
+             这个 hotkey 就是「设置 → 快捷键」里「轻迹」那一行的 Ctrl+Alt+O，
+             按下去展开 / 收起本面板；打开标签页的那个键在 onload 的命令里，别搞混。 */
+          title: DOCK_TITLE,
+          hotkey: DOCK_HOTKEY,
         },
         data: {},
         init: (dock) => this._initLifeLogDock(dock),
@@ -2260,6 +2285,31 @@
       return `hsl(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%)`;
     }
 
+    /* 把本地存储里那份 Dock 存档校正成当前代码里的样子：标题 + 快捷键。
+       为什么需要：思源在 addPluginDock 里会拿 window.siyuan.storage["local-plugin-docks"]
+       里已有的条目**整份覆盖** plugin.docks[key].config（见 app/src/plugin/loader.ts），
+       本意是保住用户在界面上调过的位置 / 尺寸 / 显隐 —— 副作用是插件改过标题之后，
+       老用户那边永远显示第一次注册时存下的旧名（轻迹曾叫「时迹」，就是这么被冻住的）。
+       所以这里在 addDock **之前**校正内存里那份存档：只动 title 与 hotkey 两个字段，
+       位置 / 尺寸 / 显隐原样保留，用户调过的面板状态不丢；也刻意不落盘
+       （不写用户工作空间里的 local.json），每次启动校正一次即可，代价为零。
+       时机很关键：addDock 跑完之后 config 已经被存档覆盖，那时候再改就晚了。 */
+    _syncDockMeta() {
+      try {
+        const store = window.siyuan && window.siyuan.storage;
+        const bucket = store && store["local-plugin-docks"];
+        const mine = bucket && bucket[this.name];
+        const rec = mine && mine[this.name + DOCK_TYPE];
+        if (!rec) return;
+        if (rec.title !== DOCK_TITLE) rec.title = DOCK_TITLE;
+        /* 快捷键同理：存档里存的是第一次注册时的值（轻迹那份是空串），
+           不校正的话 addPluginDock 会把它盖回 config.hotkey，面板那行就一直没有快捷键。 */
+        if (rec.hotkey !== DOCK_HOTKEY) rec.hotkey = DOCK_HOTKEY;
+      } catch (e) {
+        console.warn(`${NAME}：校正 Dock 配置失败`, e);
+      }
+    }
+
     /* Dock 初始化：记录元素并渲染整块视图 */
     _initLifeLogDock(dock) {
       if (!dock || !dock.element) return;
@@ -2272,9 +2322,14 @@
       this._applyDockVisibility();
     }
 
-    /* 由「Dock 侧边栏显示」开关驱动：控制 LifeLog 在思源侧栏的入口（dock 栏按钮 + 面板）。
+    /* 由「Dock 侧边栏显示」开关驱动：控制 LifeLog 在思源侧栏的入口（dock 栏按钮）。
        关键事实：addDock 返回的是描述对象 {id,config,model}，没有 show/hide 方法，
-       所以这里直接操作 DOM —— 显隐侧栏 dock 栏按钮（.dock__item[data-type]）与面板容器（sy__<type>）。 */
+       所以这里直接操作 DOM —— 显隐侧栏 dock 栏按钮（.dock__item[data-type]）。
+
+       **面板容器不在这里藏**（这里踩过坑）：思源切换面板显隐靠的是自己那层状态，
+       压不过元素上的内联 `display:none`。一旦给 dock.element 写上内联隐藏，
+       面板其实被打开了、却永远看不见 —— 表现出来就是「按快捷键没反应」。
+       所以只藏入口按钮，面板的开合交给思源自己的开关（快捷键走的也是那一套）。 */
     _applyDockVisibility() {
       const type = this.name + DOCK_TYPE;
       const apply = () => {
@@ -2285,12 +2340,15 @@
         if (btn) {
           btn.style.display = this.data.dockVisible ? "" : "none";
         }
-        /* 面板容器本身：关闭时一并藏掉，避免残留已展开的面板 */
-        if (this._lifeLogDockEl) {
-          this._lifeLogDockEl.style.display = this.data.dockVisible ? "" : "none";
-        }
       };
       apply();
+      /* 兜底清一次旧版本留下的内联隐藏：老代码给面板写过 display:none，
+         元素上还带着的话，面板照样出不来 */
+      if (this._lifeLogDockEl && this._lifeLogDockEl.style.display === "none") {
+        this._lifeLogDockEl.style.display = "";
+      }
+      /* 开关关闭时如果面板正开着，顺手收起它 —— 是「收起」而不是「藏起来」 */
+      if (!this.data.dockVisible) this._collapseLifeLogDock();
       /* 侧栏按钮可能晚于 onLayoutReady 渲染，关闭状态下多试几帧兜底 */
       if (!this.data.dockVisible) {
         let tries = 0;
@@ -2300,6 +2358,32 @@
         };
         requestAnimationFrame(tick);
       }
+    }
+
+    /* 收起侧栏的轻迹面板：只在它**确实展开着**的时候动手 ——
+       否则这一下反而会把它打开。走思源自己的开关（跟快捷键同一套逻辑），
+       不碰内联 display。 */
+    _collapseLifeLogDock() {
+      const el = this._lifeLogDockEl;
+      if (!el || !el.getBoundingClientRect().width) return;
+      const type = this.name + DOCK_TYPE;
+      const btn = document.querySelector('.dock__item[data-type="' + type + '"]');
+      if (btn) {
+        btn.click();
+        return;
+      }
+      try {
+        const L =
+          (window.siyuan && window.siyuan.layout) ||
+          (this.app && this.app.layout);
+        if (!L) return;
+        for (const area of [L.leftDock, L.rightDock, L.bottomDock]) {
+          if (area && area.data && area.data[type]) {
+            area.toggleModel(type, false, false);
+            return;
+          }
+        }
+      } catch (e) {}
     }
 
     /* 把「Dock 栏紧凑模式」状态反映到 dock 根元素 class 上。
@@ -2897,8 +2981,8 @@
         return before ? "上个月" : "下个月";
       }
       if (view === "week") return before ? "上一周" : "下一周";
-      if (view === "three") return before ? "往前三天" : "往后三天";
-      if (view === "day") return before ? "前一天" : "后一天";
+      /* 三日与日视图都是「一天一格」地翻，提示语一致 */
+      if (view === "three" || view === "day") return before ? "前一天" : "后一天";
       return before ? "上个月" : "下个月";
     }
 
@@ -4761,14 +4845,18 @@
             this._paintCalendarTab(container);
             return;
           }
-          /* 时间轴视图是一次成型的静态网格，没有滑动窗口可滚，直接按**整个窗口的宽度**
-             挪锚点再重绘。步长就取窗口自己的天数，不要在这里另写一份 7 / 3 / 1 ——
-             两处各写一份迟早会写岔，而「步长 = 窗口宽度」正是相邻窗口首尾相接的前提。
-             锚点保留原来的「日」，所以翻页是整窗一格一格地走，不会跑偏。 */
+          /* 时间轴视图是一次成型的静态网格，没有滑动窗口可滚，直接挪锚点再重绘。
+             步长分两种：周视图翻整周（= 窗口宽度 7，相邻周首尾相接）；三日 / 日视图
+             按「天」翻一格 —— 三日视图早先是整窗翻 3 天，一按就跳过去三天，落点太跳，
+             想看清楚中间发生了什么得来回找，所以改成一天一天走。
+             锚点保留原来的「日」，所以翻页是一格一格地走，不会跑偏。 */
           if (this._calTabView !== "month") {
             const base =
               this._calTabAnchor instanceof Date ? this._calTabAnchor : new Date();
-            const step = this._calTimelineDays(base, this._calTabView).length;
+            const step =
+              this._calTabView === "three"
+                ? 1
+                : this._calTimelineDays(base, this._calTabView).length;
             this._calTabAnchor = new Date(
               base.getFullYear(),
               base.getMonth(),

@@ -2565,13 +2565,26 @@
 }
 
 /* 矮块（当天末条基本都是）：两行放不下，改成时间 + 标题挤在同一行。
-   时间在前 —— 它短且固定，不会被裁；要裁就裁标题，完整记录还有悬停气泡兜着。 */
-.north-caltab-wv-event.is-compact .north-caltab-wv-event-title,
-.north-caltab-wv-event.is-compact .north-caltab-wv-event-time {
-  display: inline;
+   时间在前 —— 它短且固定，不会被裁；要裁就裁标题，完整记录还有悬停气泡兜着。
+   必须用 flex 把两者按死在同一行：光把 display 改成 inline 的话，列一窄，
+   两个 inline 元素之间就会断行，标题被挤到第二行、再被 overflow 裁掉 ——
+   表现出来就是「08:22 这条内容没显示全」。
+   title 上的 min-width:0 是让省略号生效的关键：flex 项默认 min-width:auto
+   不肯收缩，不给它归零就压不出省略号。 */
+.north-caltab-wv-event.is-compact {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
 }
 .north-caltab-wv-event.is-compact .north-caltab-wv-event-time {
-  margin-right: 5px;
+  flex: 0 0 auto;
+  display: block;
+}
+.north-caltab-wv-event.is-compact .north-caltab-wv-event-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
 }
 
 /* ===== 统计视图（第五段位）：版式参考 lumina 统计页 =====
