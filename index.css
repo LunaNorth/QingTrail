@@ -453,18 +453,14 @@
   outline: none;
   border-color: var(--b3-theme-primary);
 }
-/* 盒子头右侧：「目标 [下拉]」+「次数 | 分钟」，整体靠右 */
+/* 盒子头右侧：别名输入，整体靠右 */
 .tt-habitpick__cfgright {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
 }
-.tt-habitpick__goallabel {
-  font-size: 11.5px;
-  color: var(--b3-theme-on-surface-light);
-}
-/* 单位切换「次数 | 分钟」：等宽两格 */
+/* 单位切换「次数 | 分钟」：等宽两格（目标模型行里的四组段切也复用这套） */
 .tt-habitpick__units {
   display: inline-flex;
   border: 1px solid var(--b3-border-color);
@@ -491,28 +487,24 @@
   background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
   color: var(--b3-theme-primary);
 }
-/* 5 档门槛：色块预览 + 「等级N ≥」+ 数字框；空着 = 那一档不启用 */
-.tt-habitpick__steps {
+/* 目标模型行：单位 / 方向（好 · 坏习惯）/ 周期（日 · 周 · 月）/ 计法（合计 · 天数）
+   四组段切 + 目标值输入，一行放下就一行，窄面板自动换行 */
+.tt-habitpick__model {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px 10px;
 }
-.tt-habitpick__step {
+.tt-habitpick__goalrow {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 11.5px;
   color: var(--b3-theme-on-surface-light);
   white-space: nowrap;
 }
-.tt-habitpick__swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  flex: 0 0 auto;
-}
-.tt-habitpick__step input {
-  width: 44px;
+.tt-habitpick__goalrow input {
+  width: 56px;
   padding: 2px 5px;
   border: 1px solid var(--b3-border-color);
   border-radius: 5px;
@@ -522,15 +514,24 @@
   line-height: 1.6;
   text-align: center;
 }
-.tt-habitpick__step input:focus {
+.tt-habitpick__goalrow input:focus {
   outline: none;
   border-color: var(--b3-theme-primary);
 }
 /* 数字框的上下箭头在这么小的框里很挤，去掉（还是要能直接打字） */
-.tt-habitpick__step input::-webkit-outer-spin-button,
-.tt-habitpick__step input::-webkit-inner-spin-button {
+.tt-habitpick__goalrow input::-webkit-outer-spin-button,
+.tt-habitpick__goalrow input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+/* 门槛卡头部的分组小标：显示该习惯归属的分组，没分组不占位 */
+.tt-habitpick__gtag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 10.5px;
+  white-space: nowrap;
 }
 
 /* ===================== 设置弹窗（左侧导航 + 右侧内容） =====================
@@ -963,6 +964,150 @@
 .tt-types__reset:hover {
   background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 10%, transparent);
   border-color: var(--b3-theme-error, #d23f31);
+}
+
+/* ===================== 习惯分组管理（设置卡片内） =====================
+   版式照抄类型管理（.tt-types）：分组盒子 + 底部虚线「添加分组」；
+   成员芯片直接复用 .tt-habitpick__chip，两个弹窗观感是一套的。 */
+
+.tt-habgrp {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.tt-habgrp__intro {
+  margin-bottom: 16px;
+  font-size: var(--b3-font-size);
+  line-height: 1.6;
+  color: var(--b3-theme-on-surface);
+}
+.tt-habgrp__groups {
+  display: flex;
+  flex-direction: column;
+}
+.tt-habgrp__group {
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 25%, transparent);
+}
+.tt-habgrp__group:first-child {
+  padding-top: 0;
+}
+.tt-habgrp__group:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.tt-habgrp__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.tt-habgrp__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  width: 160px;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-habgrp__name:focus {
+  border-bottom-color: color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.tt-habgrp__name::placeholder {
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
+}
+.tt-habgrp__count {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+/* 鼓励语 / 说明输入：一行淡入淡出的下划线输入框，空着 = 不展示 */
+.tt-habgrp__desc {
+  margin-bottom: 8px;
+}
+.tt-habgrp__desc-input {
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--b3-theme-on-surface);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-habgrp__desc-input:focus {
+  border-bottom-color: color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.tt-habgrp__desc-input::placeholder {
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
+}
+/* 删除按钮：悬停分组盒子才显形，避免一排红叉压住内容 */
+.tt-habgrp__remove {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.tt-habgrp__group:hover .tt-habgrp__remove {
+  opacity: 1;
+}
+.tt-habgrp__remove:hover {
+  background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 12%, transparent);
+  color: var(--b3-theme-error, #d23f31);
+}
+.tt-habgrp__members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tt-habgrp__none {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.tt-habgrp__add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 5px 12px;
+  border: 1px dashed color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.tt-habgrp__add:hover {
+  border-color: var(--b3-theme-primary);
+  color: var(--b3-theme-primary);
+  background: color-mix(in srgb, var(--b3-theme-primary) 8%, transparent);
+}
+.tt-habgrp__hint {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
 }
 
 /* ===================== 取色面板（类型 / 分组配色） =====================
@@ -2151,6 +2296,36 @@
   opacity: 1;
   transform: translateY(0);
 }
+/* 富文本气泡（data-tip-html）：习惯卡的「打卡进度」用 —— 本周 / 本月各一行，
+   每行「药丸标签 + 数值加粗」，行不折行、气泡放宽到放得下为止。 */
+.north-lifelog-tip.is-multiline {
+  max-width: min(560px, 92vw);
+}
+.north-lifelog-tip.is-multiline .tip-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.north-lifelog-tip.is-multiline .tip-line + .tip-line {
+  margin-top: 3px;
+}
+.north-lifelog-tip.is-multiline .tip-line b {
+  font-weight: 600;
+}
+.north-lifelog-tip.is-multiline .tip-line b.neg {
+  color: var(--b3-theme-error, #d23f31);
+}
+.north-lifelog-tip.is-multiline .tip-tag {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-primary) 12%, transparent);
+  color: var(--b3-theme-primary);
+  font-size: 11px;
+  line-height: 1.7;
+  font-style: normal;
+}
 
 /* ===================== 日历标签页（思源主区域的 tab） =====================
    由 index.js 的 _renderCalendarTab / _paintCalendarTab 渲染，
@@ -3167,6 +3342,230 @@
   border-radius: 2px;
   background: var(--b3-theme-primary);
   transition: width 0.2s ease;
+}
+/* 分组节：设置里建过分组后，习惯卡按组分节展示。
+   节是一层浅色底的面板：卡片（白底淡边）铺在它上面，组与组之间靠
+   「底色差 + 圆角」区分，不再只靠一行小字；节头带一条竖色条加重存在感。
+   没归组的习惯不套节，按原来的平铺卡片排在各分组后面。 */
+.north-caltab-habit-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-habit-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 2px;
+}
+.north-caltab-habit-sec-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 竖色条：节头的「前缀」，一眼扫过去先看见条、再读到组名 */
+.north-caltab-habit-sec-name::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--b3-theme-primary);
+}
+.north-caltab-habit-sec-count {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+/* 节头的鼓励语 / 说明：占满剩余宽度，过长省略号截断（悬停无提示，改文案去设置里看全文） */
+.north-caltab-habit-sec-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 组合本周进度：节头下方的一条汇总 —— 组合完成率 + 周进度条 + 周期剩余天数，
+   下面一行一个列出组内每个习惯的迷你进度（名称 / 进度条 / 百分比 / 已完成÷应完成）。
+   配色沿用热力格那套：迷你进度条填充用习惯自己的类型色（--tt-c）。
+   白底淡边小面板，与习惯卡同款写法，铺在分组节的浅色底上。 */
+.north-caltab-habit-gsum {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 12px 10px;
+  border-radius: 8px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.north-caltab-habit-gsum-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.north-caltab-habit-gsum-label {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-gsum-rate {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-primary);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-habit-gsum-row .north-caltab-habit-gsum-track {
+  flex: 1;
+}
+.north-caltab-habit-gsum-track {
+  min-width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 8%, transparent);
+  overflow: hidden;
+}
+.north-caltab-habit-gsum-track i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--b3-theme-primary);
+  transition: width 0.2s ease;
+}
+/* 「剩余 N 天」做成主色小药丸，和参考图那枚周期标对上 */
+.north-caltab-habit-gsum-left {
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-primary) 10%, transparent);
+  color: var(--b3-theme-primary);
+  font-size: 10.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-habit-gsum-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.north-caltab-habit-gsum-item {
+  display: grid;
+  grid-template-columns: minmax(40px, 5em) 1fr 36px 44px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.north-caltab-habit-gsum-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-habit-gsum-item .north-caltab-habit-gsum-track i {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, var(--b3-theme-primary)) 80%,
+    var(--b3-theme-background)
+  );
+}
+.north-caltab-habit-gsum-pct {
+  text-align: right;
+  color: color-mix(
+    in srgb,
+    var(--tt-c, var(--b3-theme-primary)) 75%,
+    var(--b3-theme-on-surface)
+  );
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-habit-gsum-frac {
+  text-align: right;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 统计行里的「打卡进度」项：细节数据在悬浮气泡里（data-tip 两行），
+   本体保持一行大小；给个问号光标 + 悬停微亮，暗示可以悬停 */
+.north-caltab-habit-progress {
+  cursor: help;
+}
+.north-caltab-habit-progress:hover {
+  color: var(--b3-theme-primary);
+}
+
+/* ===================== 分组收起 / 展开两层 =====================
+   默认收起：每个分组一张紧凑卡（完成率 + 剩余天数 + 鼓励语 + 迷你进度），
+   排进自适应网格 —— 宽屏三列、中等两列、窄屏一列，不写死列数。
+   整卡点击展开成完整节（节头 + 汇总条 + 全年热力）；节头点击收回。
+   展开状态落盘（habitGroupExpanded），下次回来保持。 */
+.north-caltab-habit-gcards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.north-caltab-habit-gcard {
+  padding: 12px 14px 13px;
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.north-caltab-habit-gcard:hover {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
+}
+.north-caltab-habit-gcard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.north-caltab-habit-gcard-rate {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--b3-theme-primary);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-habit-gcard-head .north-caltab-habit-chev {
+  margin-left: auto;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-gcard-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  margin-bottom: 2px;
+}
+.north-caltab-habit-gcard-desc {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--b3-theme-on-surface-light);
+  margin-bottom: 8px;
+}
+/* 卡内迷你进度行距比展开态汇总条里略紧 */
+.north-caltab-habit-gcard .north-caltab-habit-gsum-items {
+  margin-top: 8px;
+  gap: 6px;
+}
+/* 展开节：节头可点收回，箭头转向上；悬停给一点反馈 */
+.north-caltab-habit-sec-head {
+  cursor: pointer;
+}
+.north-caltab-habit-sec-chev {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-sec .north-caltab-habit-chev {
+  transform: rotate(180deg);
+}
+.north-caltab-habit-sec-head:hover .north-caltab-habit-sec-chev {
+  color: var(--b3-theme-primary);
 }
 /* 一个习惯一张卡。
    **卡片自己不染色**：热力图里该有颜色的只有格子，卡底铺类型色会整片泛色、

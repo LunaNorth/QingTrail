@@ -36,43 +36,47 @@
      习惯 = 用户从「记录类型」里自己挑出来的几个（挑哪些存在 settings.habitTypes，
      是个类型名数组）。挑中的类型才追踪，没挑的不算 —— 不然「记录」这种量大又杂的
      类型会把习惯页塞满，看不出什么。
-     某一天的表现 = 当天该类型**记了几次**（或累计多少分钟，两种量纲可选），
-     再拿这个数去比该习惯自己的**门槛阶梯**：从最高档往下比，先满足的那档就是
-     这一天的等级（1~5，级数越高格子越深）；一档都没满足 → 0（不上色）。
-     阶梯每个习惯各配一套（settings.habitConfig），默认「按次数 1/2/3/4/5」。
-     空门槛 = 那一档不启用 —— 只填「等级5 ≥ 1 次」就是「记一次就算完成」的打卡玩法。 */
+     目标模型四要素（settings.habitConfig，每个习惯各一份）：
+       单位 unit      = 次数 | 分钟（当天该类型记了几次 / 累计多少分钟）
+       方向 dir       = 好习惯（达到目标算达标）| 坏习惯（低于目标算达标，如「玩手机 < 2 小时」）
+       周期 period    = 日目标 | 周目标 | 月目标
+       目标 goal      = 一个数字；周 / 月目标另有计法 goalUnit = 合计（整段周期累计）| 天数（周期内达标天数）
+     年热力图 5 级色的来源：
+       日目标 → 当天值与目标的倍数（≥1 倍 = 等级 1 … ≥5 倍 = 等级 5；
+                坏习惯反过来，达标不上色、超出才上色，超得越多颜色越深）；
+       周 / 月目标 → 周期内**累计**进度的步进带（有记录 = 等级 1，≥25% = 2，≥50% = 3，
+                ≥75% = 4，≥100% = 5）—— 一天一天看着累计条往目标走。
+     连续 / 最长按各自周期结算：日目标数天、周目标数周、月目标数月。 */
   const HABIT_UNITS = [
     { value: "count", label: "次数" },
     { value: "min", label: "分钟" },
   ];
-  const HABIT_DEFAULT_STEPS = { count: [1, 2, 3, 4, 5], min: [30, 60, 90, 120, 150] };
-  /* 目标频率：每周要完成几天，7 = 每天（默认）。
-     默认值存在 `data.habitConfig[类型].target`（1..7）。
-     非每天的习惯**不该因为「今天没记」被判失败**，所以：
-     - 连续 / 最长按**周**算（那一周记够 N 天就算达成，本周还没过完不算断）；
-     - 月度完成度的分母按目标折算（19 天 × 3/7 ≈ 8 天），显示成「2/8」而不是「2/19」；
-     - 顶部总览里，这类习惯算「本期达成」而不是「今日完成」。 */
-  const HABIT_TARGET_OPTIONS = [
-    { value: "7", label: "每天" },
-    { value: "6", label: "每周 6 天" },
-    { value: "5", label: "每周 5 天" },
-    { value: "4", label: "每周 4 天" },
-    { value: "3", label: "每周 3 天" },
-    { value: "2", label: "每周 2 天" },
-    { value: "1", label: "每周 1 天" },
+  /* 旧版 5 档阶梯已退役：等级色改由目标值自动推导（见文件头「习惯视图」说明），
+     这里只保留「目标值兜底」—— 迁移不出目标值时按单位给默认 */
+  const HABIT_GOAL_DEFAULT = { count: 1, min: 30 };
+  const HABIT_DIRS = [
+    { value: "good", label: "好习惯" },
+    { value: "bad", label: "坏习惯" },
   ];
-  const habitTargetLabel = (t) => (t >= 7 ? "每天" : `每周 ${t} 天`);
+  const HABIT_PERIODS = [
+    { value: "day", label: "日" },
+    { value: "week", label: "周" },
+    { value: "month", label: "月" },
+  ];
+  const HABIT_PERIOD_LABEL = { day: "每天", week: "每周", month: "每月" };
+  const HABIT_GUNITS = [
+    { value: "value", label: "合计" },
+    { value: "days", label: "天数" },
+  ];
   /* 门槛的单位后缀：3 次 / 30 分 */
   const habitUnitLabel = (unit, v) => (unit === "min" ? `${v} 分` : `${v} 次`);
-  /* 阶梯判定：value 落在哪一档（1..5）；0 / 空返回 0（不上色） */
-  const habitLevelOf = (steps, value) => {
-    if (!value) return 0;
-    for (let i = steps.length - 1; i >= 0; i--) {
-      const t = steps[i];
-      if (t === "" || t == null) continue;
-      if (value >= +t) return i + 1;
+  /* 目标一句话：每天 ≥ 5 次 / 每周 ≥ 3 天 / 每月 < 10 次 —— 卡片上的小徽标用 */
+  const habitGoalText = (cfg) => {
+    const p = HABIT_PERIOD_LABEL[cfg.period] || "每天";
+    if (cfg.period !== "day" && cfg.goalUnit === "days") {
+      return `${p} ≥ ${cfg.goal} 天`;
     }
-    return 0;
+    return `${p} ${cfg.dir === "bad" ? "<" : "≥"} ${habitUnitLabel(cfg.unit, cfg.goal)}`;
   };
 
   /* ---- 日历数据源 ----
@@ -1153,6 +1157,17 @@
             "点一下切换。挑中的类型会在「习惯」段位里一个类型一张卡地追踪，下面还能给每个习惯单独配门槛。",
         })
       );
+      /* 习惯分组：把挑中的习惯按模块归类（比如「健康习惯」装喝水、健身），
+         习惯页按组分节展示。管理弹窗复用类型管理那套 .tt-modal 骨架。 */
+      habitCard.appendChild(
+        this._buildRow({
+          title: "习惯分组",
+          desc: "建几个分组，把挑中的习惯点进对应的组里；习惯页会按分组分节展示。",
+          controlType: "button",
+          buttonText: "管理",
+          onClick: () => this._openHabitGroupModal(),
+        })
+      );
       const habitPick = document.createElement("div");
       habitPick.className = "tt-habitpick";
       habitCard.appendChild(habitPick);
@@ -1169,6 +1184,8 @@
        重新赋值监听不会越挂越多。 */
     _mountHabitPicker(host) {
       if (!host) return;
+      /* 记下宿主：习惯分组弹窗关掉时要刷新这一份（门槛卡头部的分组小标） */
+      this._habitPickHost = host;
       const picked = new Set(this._habitTypes());
       const cands = this._habitCandidates();
       if (!cands.length) {
@@ -1188,83 +1205,98 @@
             </button>`
         )
         .join("");
-      /* 挑中的习惯各配一套门槛：单位（次数 / 分钟）+ 5 档门槛，空着 = 那一档不启用。
-         只填「等级5 ≥ 1 次」就是「记一次就算完成」的打卡玩法。 */
+      /* 挑中的习惯各配一套目标模型：单位（次数 / 分钟）× 方向（好 / 坏习惯）×
+         周期（日 / 周 / 月）× 目标值。等级色由目标值自动推导，不再手填 5 档。 */
+      const segHtml = (options, cur, attr) =>
+        `<span class="tt-habitpick__units">${options
+          .map(
+            (o) =>
+              `<button class="tt-habitpick__unit${
+                cur === o.value ? " on" : ""
+              }" type="button" data-habit-${attr}="${o.value}">${o.label}</button>`
+          )
+          .join("")}</span>`;
       const cfgs = this._habitTypes()
         .map((type) => {
           const cfg = this._habitConfig(type);
           const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
-          const units = HABIT_UNITS.map(
-            (u) =>
-              `<button class="tt-habitpick__unit${
-                cfg.unit === u.value ? " on" : ""
-              }" type="button" data-habit-unit="${u.value}">${u.label}</button>`
-          ).join("");
-          const steps = cfg.steps
-            .map(
-              (t, i) =>
-                `<label class="tt-habitpick__step"><i class="tt-habitpick__swatch tt-lv${
-                  i + 1
-                }"></i><span>等级${i + 1} ≥</span><input type="number" min="1" max="999" value="${
-                  t === "" ? "" : t
-                }" data-habit-step="${i}" autocomplete="off"></label>`
-            )
-            .join("");
+          const periodWord = HABIT_PERIOD_LABEL[cfg.period];
+          /* 目标行前缀：坏习惯用「<」，天数计法固定「≥」 */
+          const cmp = cfg.dir === "bad" ? "<" : "≥";
+          const goalLabel =
+            cfg.period !== "day" && cfg.goalUnit === "days"
+              ? `${periodWord} ≥`
+              : `${periodWord} ${cmp}`;
+          const goalSuffix =
+            cfg.period !== "day" && cfg.goalUnit === "days"
+              ? "天"
+              : cfg.unit === "min"
+                ? "分钟"
+                : "次";
           return `<div class="tt-habitpick__cfg" data-habit-cfg="${escapeHtml(
             type
           )}" style="--tt-c:${escapeHtml(color)}">
                 <div class="tt-habitpick__cfghead">
                     <span class="tt-habitpick__dot" style="background:${escapeHtml(color)}"></span>
-                    <span class="tt-habitpick__name">${escapeHtml(type)}</span>
+                    <span class="tt-habitpick__name">${escapeHtml(type)}</span>${
+                      this._habitGroupOf(type)
+                        ? `<span class="tt-habitpick__gtag">${escapeHtml(
+                            this._habitGroupOf(type)
+                          )}</span>`
+                        : ""
+                    }
                     <span class="tt-habitpick__cfgright">
                         <label class="tt-habitpick__alias"><span>别名</span><input type="text" maxlength="16" value="${escapeHtml(
                           cfg.alias
                         )}" placeholder="${escapeHtml(type)}" data-habit-alias autocomplete="off"></label>
-                        <span class="tt-habitpick__goallabel">目标</span>
-                        <span class="tt-habitpick__goalslot"></span>
-                        <span class="tt-habitpick__units">${units}</span>
                     </span>
                 </div>
-                <div class="tt-habitpick__steps">${steps}</div>
+                <div class="tt-habitpick__model">
+                    ${segHtml(HABIT_UNITS, cfg.unit, "unit")}
+                    ${segHtml(HABIT_DIRS, cfg.dir, "dir")}
+                    ${segHtml(HABIT_PERIODS, cfg.period, "period")}
+                    ${
+                      cfg.period === "day"
+                        ? ""
+                        : segHtml(HABIT_GUNITS, cfg.goalUnit, "gunit")
+                    }
+                    <label class="tt-habitpick__goalrow">
+                        <span>${goalLabel}</span>
+                        <input type="number" min="1" max="9999" step="1" value="${cfg.goal}" data-habit-goal autocomplete="off">
+                        <span>${goalSuffix}</span>
+                    </label>
+                </div>
             </div>`;
         })
         .join("");
       host.innerHTML =
         `<div class="tt-habitpick__chips">${chips}</div>` +
         (cfgs
-          ? `<div class="tt-habitpick__hint">下面给每个习惯配门槛：当天这个类型达到哪一档就往哪一档上色（从高往低比，先满足的算）。留空 = 那一档不启用 —— 只填「等级5 ≥ 1 次」就是「记一次就算完成」。目标不是「每天」的习惯（例如每周 3 天），连续 / 最长会按「周」算、月度完成度也按目标折算，不会因为当天没记就判失败。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
+          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
           : "");
-      /* 目标频率（每周几天）用现成的自定义下拉 —— 与设置里其它 select 同一个组件；
-         它返回的是 DOM，所以上面先留空位、这里再逐个塞进去 */
-      host.querySelectorAll("[data-habit-cfg]").forEach((box) => {
-        const slot = box.querySelector(".tt-habitpick__goalslot");
-        if (!slot) return;
-        const type = box.dataset.habitCfg;
-        slot.appendChild(
-          this._buildCddl({
-            options: HABIT_TARGET_OPTIONS,
-            value: String(this._habitConfig(type).target),
-            onChange: (v) => {
-              const cfg = this._habitConfig(type);
-              cfg.target = Math.max(1, Math.min(7, +v || 7));
-              this._habitSetConfig(type, cfg);
-              this._refreshCalendarTabs();
-            },
-          })
-        );
-      });
       /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
       host.onclick = (e) => {
-        const unitBtn = e.target.closest && e.target.closest("[data-habit-unit]");
-        if (unitBtn) {
-          const box = unitBtn.closest("[data-habit-cfg]");
+        /* 四段切换（单位 / 方向 / 周期 / 计法）共用一套逻辑 */
+        const ATTRS = ["unit", "dir", "period", "gunit"];
+        for (const attr of ATTRS) {
+          const btn = e.target.closest && e.target.closest(`[data-habit-${attr}]`);
+          if (!btn) continue;
+          const box = btn.closest("[data-habit-cfg]");
           if (!box) return;
           const type = box.dataset.habitCfg;
           const cfg = this._habitConfig(type);
-          if (cfg.unit === unitBtn.dataset.habitUnit) return;
-          cfg.unit = unitBtn.dataset.habitUnit;
-          /* 换了量纲，门槛跟着换成那套默认值（1/2/3/4/5 次 ↔ 30/60/90/120/150 分） */
-          cfg.steps = HABIT_DEFAULT_STEPS[cfg.unit].slice();
+          const v = btn.dataset[`habit${attr[0].toUpperCase()}${attr.slice(1)}`];
+          const key = attr === "gunit" ? "goalUnit" : attr;
+          if (cfg[key] === v) return;
+          cfg[key] = v;
+          if (key === "unit") {
+            /* 换了量纲，目标值换成该单位的默认（次数 1 次 ↔ 分钟 30 分） */
+            cfg.goal = HABIT_GOAL_DEFAULT[cfg.unit];
+          }
+          if (key === "period") {
+            /* 日目标没有「合计 / 天数」之分，切回日目标时计法归位 */
+            if (v === "day") cfg.goalUnit = "value";
+          }
           this._habitSetConfig(type, cfg);
           this._mountHabitPicker(host);
           this._refreshCalendarTabs();
@@ -1298,18 +1330,17 @@
           this._refreshCalendarTabs();
           return;
         }
-        const input = e.target.closest && e.target.closest("[data-habit-step]");
+        const input = e.target.closest && e.target.closest("[data-habit-goal]");
         if (!input) return;
         const box = input.closest("[data-habit-cfg]");
         if (!box) return;
         const type = box.dataset.habitCfg;
         const cfg = this._habitConfig(type);
         const raw = String(input.value == null ? "" : input.value).trim();
-        const v =
-          raw === "" ? "" : Math.max(1, Math.min(999, parseInt(raw, 10) || 1));
-        cfg.steps[+input.dataset.habitStep] = v;
+        const v = Math.max(1, Math.min(99999, parseFloat(raw) || 1));
+        cfg.goal = v;
         this._habitSetConfig(type, cfg);
-        input.value = v === "" ? "" : v;
+        input.value = v;
         this._refreshCalendarTabs();
       };
     }
@@ -2085,6 +2116,218 @@
       /* 打开即接管为 fixed 定位，避免首次拖动时跳一下 */
       ensurePositioned();
       this._typesModal = modal;
+    }
+
+    /* ===================== 习惯分组管理 ===================== */
+
+    /* 打开「习惯分组」弹窗：建组、改名、删组，把挑中的习惯点进 / 点出分组。
+       骨架与类型管理共用 .tt-modal；列表短，不做拖拽。 */
+    _openHabitGroupModal(onClose) {
+      /* 同时只允许一个实例 */
+      if (this._habitGroupModal) {
+        this._habitGroupModal.remove();
+        this._habitGroupModal = null;
+      }
+      const modal = document.createElement("div");
+      modal.className = "tt-modal";
+      modal.innerHTML = `
+        <div class="tt-modal__backdrop"></div>
+        <div class="tt-modal__panel">
+          <div class="tt-modal__header">
+            <span class="tt-modal__header-title">习惯分组</span>
+            <button class="tt-modal__close" type="button" aria-label="关闭">×</button>
+          </div>
+          <div class="tt-modal__body"></div>
+        </div>
+      `;
+      modal.querySelector(".tt-modal__body").appendChild(
+        this._buildHabitGroupSettings()
+      );
+
+      const close = () => {
+        document.removeEventListener("keydown", onKey, true);
+        modal.remove();
+        if (this._habitGroupModal === modal) this._habitGroupModal = null;
+        /* 设置面板的门槛卡头部带着分组小标，关窗时刷新一份 */
+        if (this._habitPickHost) this._mountHabitPicker(this._habitPickHost);
+        if (typeof onClose === "function") {
+          try {
+            onClose();
+          } catch (e) {
+            console.warn(`${NAME}：习惯分组关闭回调失败`, e);
+          }
+        }
+      };
+      /* ESC 关闭（捕获阶段，免得被面板里的输入框吃掉） */
+      const onKey = (e) => {
+        if (e.key === "Escape") close();
+      };
+      document.addEventListener("keydown", onKey, true);
+
+      modal.querySelector(".tt-modal__backdrop").addEventListener("click", close);
+      modal.querySelector(".tt-modal__close").addEventListener("click", close);
+
+      document.body.appendChild(modal);
+      this._habitGroupModal = modal;
+    }
+
+    /* 构造习惯分组的管理面板：分组列表（名字 + 成员芯片）+ 添加分组。
+       芯片直接复用习惯设置那套 .tt-habitpick__chip 样式，观感是一套的。 */
+    _buildHabitGroupSettings() {
+      const wrap = document.createElement("div");
+      wrap.className = "tt-habgrp";
+      wrap.innerHTML = `
+        <div class="tt-habgrp__intro">把挑中的习惯归进同一个模块（比如「健康习惯」里放喝水、健身），习惯页会按分组分节展示。</div>
+        <div class="tt-habgrp__groups"></div>
+        <button class="tt-habgrp__add" type="button"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconAdd"></use></svg> 添加分组</button>
+        <div class="tt-habgrp__hint">点习惯名把它收进 / 移出这个分组，一个习惯同时只属于一个分组。删掉的分组里成员自动回到未分组状态；没分组的习惯在习惯页里正常平铺、排在各分组后面。</div>
+      `;
+      const groupsEl = wrap.querySelector(".tt-habgrp__groups");
+
+      const save = () => {
+        this.data.habitGroups = this._habitGroupList();
+        this._persist("保存习惯分组");
+      };
+
+      /* 单个分组盒子。name 是建盒那一刻的组名 —— 改名 / 删组后整列表重渲，
+         闭包里的 name 永远和这份 DOM 对得上，不需要在原地追踪。 */
+      const groupEl = (name) => {
+        const el = document.createElement("div");
+        el.className = "tt-habgrp__group";
+        el.innerHTML = `
+          <div class="tt-habgrp__head">
+            <input type="text" class="tt-habgrp__name" placeholder="分组名" maxlength="20" />
+            <span class="tt-habgrp__count"></span>
+            <button class="tt-habgrp__remove" type="button" title="删除分组"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconMin"></use></svg></button>
+          </div>
+          <div class="tt-habgrp__desc">
+            <input type="text" class="tt-habgrp__desc-input" placeholder="鼓励语 / 说明（可选），会显示在习惯页这个分组的标题旁" maxlength="60" />
+          </div>
+          <div class="tt-habgrp__members"></div>
+        `;
+        const nameInput = el.querySelector(".tt-habgrp__name");
+        const countEl = el.querySelector(".tt-habgrp__count");
+        const removeBtn = el.querySelector(".tt-habgrp__remove");
+        const descInput = el.querySelector(".tt-habgrp__desc-input");
+        const membersEl = el.querySelector(".tt-habgrp__members");
+        nameInput.value = name;
+        descInput.value = this._habitGroupDesc(name);
+
+        /* 鼓励语：失焦 / 回车提交；清空 = 删掉这条说明 */
+        descInput.addEventListener("change", () => {
+          const v = String(descInput.value == null ? "" : descInput.value).trim();
+          const descs = Object.assign({}, this.data.habitGroupDescs || {});
+          if (v) descs[name] = v;
+          else delete descs[name];
+          this.data.habitGroupDescs = descs;
+          save();
+        });
+
+        const habits = this._habitTypes();
+        const memberNames = habits.filter((t) => this._habitGroupOf(t) === name);
+        countEl.textContent = memberNames.length
+          ? `${memberNames.length} 个习惯`
+          : "暂无成员";
+
+        /* 成员芯片：列出当前挑中的全部习惯，组内的亮着（显示别名，与习惯卡一致） */
+        membersEl.innerHTML = habits.length
+          ? habits
+              .map((t) => {
+                const color = this._colorOf(t) || DEFAULT_TYPE_COLOR;
+                return `<button class="tt-habitpick__chip${
+                  this._habitGroupOf(t) === name ? " on" : ""
+                }" type="button" data-habgrp-member="${escapeHtml(t)}">
+                    <span class="tt-habitpick__dot" style="background:${escapeHtml(color)}"></span>
+                    <span class="tt-habitpick__name">${escapeHtml(
+                      this._habitConfig(t).alias || t
+                    )}</span>
+                </button>`;
+              })
+              .join("")
+          : '<span class="tt-habgrp__none">还没挑习惯 —— 先到「习惯设置 → 习惯类型」里点几个。</span>';
+
+        membersEl.onclick = (e) => {
+          const chip = e.target.closest && e.target.closest("[data-habgrp-member]");
+          if (!chip) return;
+          const type = chip.dataset.habgrpMember;
+          /* 点亮 = 收进本组（_habitSetGroup 是整体覆盖，天然从别的组摘出）；
+             再点一下 = 移出回「未分组」 */
+          this._habitSetGroup(type, this._habitGroupOf(type) === name ? "" : name);
+          save();
+          render();
+        };
+
+        /* 改名：失焦 / 回车提交。组名是成员配置里的引用键，改名要同步所有成员 */
+        nameInput.addEventListener("change", () => {
+          const next = nameInput.value.trim();
+          if (!next || next === name) {
+            nameInput.value = name;
+            return;
+          }
+          /* 与别的组撞名：不吞改动，恢复原名 */
+          if (this._habitGroupList().indexOf(next) >= 0) {
+            nameInput.value = name;
+            return;
+          }
+          this.data.habitGroups = this._habitGroupList().map((n) =>
+            n === name ? next : n
+          );
+          const cfgAll = this.data.habitConfig || {};
+          Object.keys(cfgAll).forEach((t) => {
+            if (cfgAll[t] && cfgAll[t].group === name) cfgAll[t].group = next;
+          });
+          /* 说明挂在组名这个键上，改名跟着搬；展开状态同理 */
+          const descs = Object.assign({}, this.data.habitGroupDescs || {});
+          if (descs[name] != null) {
+            descs[next] = descs[name];
+            delete descs[name];
+          }
+          this.data.habitGroupDescs = descs;
+          const openMap = Object.assign({}, this.data.habitGroupExpanded || {});
+          if (openMap[name] != null) {
+            openMap[next] = openMap[name];
+            delete openMap[name];
+          }
+          this.data.habitGroupExpanded = openMap;
+          save();
+          render();
+        });
+
+        removeBtn.addEventListener("click", () => {
+          this.data.habitGroups = this._habitGroupList().filter((n) => n !== name);
+          const cfgAll = this.data.habitConfig || {};
+          Object.keys(cfgAll).forEach((t) => {
+            if (cfgAll[t] && cfgAll[t].group === name) cfgAll[t].group = "";
+          });
+          const descs = Object.assign({}, this.data.habitGroupDescs || {});
+          delete descs[name];
+          this.data.habitGroupDescs = descs;
+          const openMap = Object.assign({}, this.data.habitGroupExpanded || {});
+          delete openMap[name];
+          this.data.habitGroupExpanded = openMap;
+          save();
+          render();
+        });
+
+        return el;
+      };
+
+      const render = () => {
+        groupsEl.innerHTML = "";
+        this._habitGroupList().forEach((n) => groupsEl.appendChild(groupEl(n)));
+      };
+
+      wrap.querySelector(".tt-habgrp__add").addEventListener("click", () => {
+        const existing = new Set(this._habitGroupList());
+        let n = "新分组";
+        for (let i = 2; existing.has(n); i++) n = `新分组${i}`;
+        this.data.habitGroups = this._habitGroupList().concat(n);
+        save();
+        render();
+      });
+
+      render();
+      return wrap;
     }
 
     /* 打开「设置」弹窗：把侧边栏 Dock 里的设置视图抽出来，做成截图那种
@@ -4243,8 +4486,9 @@
        设置里挑中的每个类型 = 一张卡：标题 + 四个数字 + 一整年的格子。
        年格子 = 12 个月横向并排，每个月一小块「列＝周、行＝星期（日→六）」的日历
        （补齐首日前的空位后交给 CSS 的 grid-auto-flow: column 排，见样式表）。
-       某天的格子按当天这个类型**记了几次**（或累计分钟，每个习惯自己在设置里选）
-       比对该习惯的门槛阶梯（HABIT_DEFAULT_STEPS 是默认值，可在设置里逐档改）分 5 级上色，
+       格子上色按目标模型（单位 × 方向 × 周期 × 目标值，见文件头「习惯视图」说明）：
+       日目标比当天值与目标的倍数（坏习惯反过来，超标才上色）；
+       周 / 月目标比周期内累计进度的步进带。5 级色全部自动推导，不用手填档位。
        没记录的日子只留一层淡底；格子可点 → 跳到那天的日视图。
        数据用**全量记录**（不走工具栏的类型筛选）：筛选问的是「这屏看哪些记录」，
        习惯页问的是「我挑的这几个类型这一年怎么样」—— 被筛掉就看不见自己了。
@@ -4265,9 +4509,12 @@
       return list;
     }
 
-    /* 某个习惯的分级配置：{ unit: "count"|"min", steps: [5 个门槛，""=不启用] }。
-       没配过的习惯走默认（按次数 1/2/3/4/5）。steps 存**原始值**：
-       数字 = 门槛、空串 = 这一档不启用；整个 steps 缺失才回落到默认值。 */
+    /* 某个习惯的目标模型：{ unit, dir, period, goalUnit, goal, alias, group }。
+       读取时统一规范化；**老配置在这里就地迁移**（不写盘，下一次保存自然落成新格式）：
+       - 旧「target < 7」（每周 N 天）→ 周目标 + 天数计法 + 目标 N 天；
+       - 旧「target = 7」（每天）→ 日目标 + 合合计 + 目标取旧阶梯第一档非空门槛
+         （取不到按单位兜底：次数 1 次、分钟 30 分）—— 旧的 5 级色
+         「≥1/2/3/4/5 × 门槛」和新的「≥k × 目标」完全一致，热力图不跳变。 */
     _habitConfig(type) {
       const all =
         this.data.habitConfig && typeof this.data.habitConfig === "object"
@@ -4275,34 +4522,119 @@
           : {};
       const raw = all[type] && typeof all[type] === "object" ? all[type] : {};
       const unit = raw.unit === "min" ? "min" : "count";
-      const t = +raw.target;
-      const target = t >= 1 && t <= 7 ? Math.round(t) : 7;
+      const dir = raw.dir === "bad" ? "bad" : "good";
       /* 别名：只影响习惯卡上显示的名字（类型名是数据层的，改不得）；
          留空就用类型名本身。 */
       const alias = String(raw.alias == null ? "" : raw.alias).trim();
-      const src = Array.isArray(raw.steps) ? raw.steps : [];
-      const steps = HABIT_DEFAULT_STEPS[unit].map((d, i) => {
-        const v = src[i];
-        if (v === "" || v === null) return "";
-        return v == null ? d : +v;
-      });
-      return { unit, target, alias, steps };
+      /* 分组：习惯设置里可把习惯归进某个组。存的是组名引用 ——
+         引用了不存在的组（改名没跟上、组已删）一律按「未分组」算。 */
+      const group = String(raw.group == null ? "" : raw.group).trim();
+
+      let period = "day";
+      let goalUnit = "value";
+      let goal = 0;
+      if (
+        raw.period === "day" ||
+        raw.period === "week" ||
+        raw.period === "month"
+      ) {
+        /* 新格式：直接取 */
+        period = raw.period;
+        goalUnit = raw.goalUnit === "days" ? "days" : "value";
+        const g = +raw.goal;
+        goal = g > 0 ? g : HABIT_GOAL_DEFAULT[unit];
+      } else {
+        /* 老格式迁移：target = 每周几天（1..7） */
+        const legacyTarget = +raw.target;
+        if (legacyTarget >= 1 && legacyTarget < 7) {
+          period = "week";
+          goalUnit = "days";
+          goal = Math.round(legacyTarget);
+        } else {
+          period = "day";
+          const src = Array.isArray(raw.steps) ? raw.steps : [];
+          const hit = src.find((t) => t !== "" && t != null && +t > 0);
+          goal = hit ? +hit : HABIT_GOAL_DEFAULT[unit];
+        }
+      }
+      if (period === "day") goalUnit = "value";
+      goal = Math.max(1, Math.min(99999, Math.round(goal * 100) / 100));
+
+      return { unit, dir, period, goalUnit, goal, alias, group };
     }
 
-    /* 写回某个习惯的分级配置（_persist 存的是整份 settings，新键自动落盘） */
+    /* 写回某个习惯的目标模型（_persist 存的是整份 settings，新键自动落盘）。
+       只写新格式字段 —— 旧的 target / steps 在下一次保存后自然消失。 */
     _habitSetConfig(type, cfg) {
       const all = Object.assign({}, this.data.habitConfig || {});
-      const t = +cfg.target;
+      const g = +cfg.goal;
       all[type] = {
         unit: cfg.unit === "min" ? "min" : "count",
-        target: t >= 1 && t <= 7 ? Math.round(t) : 7,
+        dir: cfg.dir === "bad" ? "bad" : "good",
+        period:
+          cfg.period === "week" || cfg.period === "month" ? cfg.period : "day",
+        goalUnit:
+          cfg.period !== "day" && cfg.goalUnit === "days" ? "days" : "value",
+        goal: g > 0 ? Math.min(99999, Math.round(g * 100) / 100) : HABIT_GOAL_DEFAULT[cfg.unit === "min" ? "min" : "count"],
         alias: String(cfg.alias == null ? "" : cfg.alias).trim(),
-        steps: (Array.isArray(cfg.steps) ? cfg.steps : [])
-          .slice(0, 5)
-          .map((v) => (v === "" || v == null ? "" : +v)),
+        group: String(cfg.group == null ? "" : cfg.group).trim(),
       };
       this.data.habitConfig = all;
-      this._persist("保存习惯分级");
+      this._persist("保存习惯目标");
+    }
+
+    /* ===================== 习惯分组 ===================== */
+
+    /* 分组名列表：去空、去重、保序（this.data.habitGroups 存的就是名字数组） */
+    _habitGroupList() {
+      const raw = Array.isArray(this.data.habitGroups)
+        ? this.data.habitGroups
+        : [];
+      const seen = new Set();
+      const list = [];
+      raw.forEach((n) => {
+        const name = String(n == null ? "" : n).trim();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          list.push(name);
+        }
+      });
+      return list;
+    }
+
+    /* 某个习惯归在哪个组；组名失效（组被删 / 改名没跟上）按「未分组」算，
+       不会在习惯页里冒出一个幽灵分组头。 */
+    _habitGroupOf(type) {
+      const cfg = this.data.habitConfig && this.data.habitConfig[type];
+      const name = String((cfg && cfg.group) == null ? "" : cfg.group).trim();
+      return this._habitGroupList().indexOf(name) >= 0 ? name : "";
+    }
+
+    /* 把习惯收进 / 移出分组：group 为空 = 未分组 */
+    _habitSetGroup(type, group) {
+      const name = String(group == null ? "" : group).trim();
+      const cfg = this._habitConfig(type);
+      cfg.group = name;
+      this._habitSetConfig(type, cfg);
+    }
+
+    /* 某个分组的鼓励语 / 说明。说明单独存一张映射表（habitGroupDescs：
+       组名 → 文案），不混进 habitGroups 名单里 —— 名单继续只存名字，
+       老数据不用迁移；键随组改名 / 删组同步搬运。配过才有值。 */
+    _habitGroupDesc(name) {
+      const all =
+        this.data.habitGroupDescs &&
+        typeof this.data.habitGroupDescs === "object"
+          ? this.data.habitGroupDescs
+          : {};
+      return String(all[name] == null ? "" : all[name]).trim();
+    }
+
+    /* 某分组在习惯页是否展开。默认收成紧凑卡，点卡才展开成全年热力；
+       状态存 habitGroupExpanded（组名 → true），随设置落盘、下次回来保持。 */
+    _habitGroupOpen(name) {
+      const all = this.data.habitGroupExpanded;
+      return !!(all && typeof all === "object" && all[name]);
     }
 
     /* 可挑的类型 = 数据里**实际出现过**的类型（与工具栏筛选面板同一份口径），
@@ -4370,73 +4702,231 @@
       return { days, totalCnt, totalMin };
     }
 
-    /* 按周统计「这一周记了几天」：{ 周起始日期键: 天数 }。
-       周的起止沿用设置里的每周起始日，与日历 / 周视图同一套（_calTabWeekStartDate）。 */
-    _habitWeeks(days, year) {
-      const map = {};
-      const d = new Date(year, 0, 1);
-      const end = new Date(year, 11, 31);
-      while (d <= end) {
-        const key = this._calKey(d);
-        const wk = this._calKey(this._calTabWeekStartDate(d));
-        if (map[wk] == null) map[wk] = 0;
-        if (days[key]) map[wk] += 1;
-        d.setDate(d.getDate() + 1);
-      }
-      return map;
+    /* 当天该习惯的「成绩值」：按次数或累计分钟（没有记录 = 0） */
+    _habitDayValue(days, key, cfg) {
+      const r = days[key];
+      if (!r) return 0;
+      return cfg.unit === "min" ? r.min || 0 : r.cnt || 0;
     }
 
-    /* 某一周记了几天 —— 总览里判断「每周 N 天」这类习惯本期是否达成 */
-    _habitWeekDone(days, weekStart) {
-      let n = 0;
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(weekStart.getTime() + i * 86400000);
-        if (days[this._calKey(d)]) n += 1;
+    /* 一段周期（从 start 起 len 天）的累计：合计型累计次数 / 分钟，
+       天数型累计「记了几天」。未来的日子在数据里不存在，天然只数到今天。 */
+    _habitPeriodSum(days, cfg, start, len) {
+      let c = 0;
+      for (let i = 0; i < len; i++) {
+        const v = this._habitDayValue(
+          days,
+          this._calKey(new Date(start.getTime() + i * 86400000)),
+          cfg
+        );
+        c += cfg.goalUnit === "days" ? (v > 0 ? 1 : 0) : v;
       }
-      return n;
+      return c;
     }
 
-    /* 当前连续：每天目标 → 连续天数（今天还没记就从昨天算起，一天还没过完不算断）；
-       每周 N 天目标 → 连续**周数**（本周还没记够就从上一周算起，一周还没过完不算断）。
-       返回 { n, unit }，unit 是「天」或「周」，显示时直接用。 */
-    _habitStreak(days, year, target) {
+    /* 一个周期的累计是否达标：好习惯 ≥ 目标 / 坏习惯 < 目标（没记录 = 0 也算达标） */
+    _habitPeriodAchieved(cfg, cum) {
+      return cfg.dir === "bad" ? cum < cfg.goal : cum >= cfg.goal;
+    }
+
+    /* 年热力格的等级（0~5）。日目标看当天值与目标的倍数（坏习惯反过来：
+       达标不上色，超出才上色，超得越多越深）；周 / 月目标看周期内累计进度的
+       步进带（>0 = 1、≥25% = 2、≥50% = 3、≥75% = 4、≥100% = 5）。 */
+    _habitLevelOf(cfg, value, cum) {
+      const g = cfg.goal || 1;
+      if (cfg.period === "day") {
+        if (value <= 0) return 0;
+        if (cfg.dir === "bad" && value < g) return 0;
+        return Math.min(5, Math.max(1, Math.ceil(value / g)));
+      }
+      const ratio = cum / g;
+      if (ratio <= 0) return 0;
+      if (ratio >= 1) return 5;
+      if (ratio >= 0.75) return 4;
+      if (ratio >= 0.5) return 3;
+      if (ratio >= 0.25) return 2;
+      return 1;
+    }
+
+    /* 周期统计（习惯卡内「本周 / 本月」两行用）。
+       返回 { check: 打卡天数, total: 累计值, rate: 完成率%, miss: 未达标期数, days: 已过天数 }。
+       完成率可为负、可超 100%：好习惯 = 累计 ÷ 目标（翻倍 = 200%）；
+       坏习惯 = 1 - 累计 ÷ 目标（压线 = 0%，超标一倍 = -100%）。
+       结算单元 = 习惯自己的周期：日目标按天结算（今天没过完不算）；
+       周 / 月目标按完整周期结算，没结完的当前期只算进度、不计入未达标。
+       单元比周期还长时（月习惯看「本周」行），完成率 / 未达标不适用，返回 null。 */
+    _habitPeriodStats(days, cfg, pStart, pLen, now) {
       const one = 86400000;
-      if (target >= 7) {
+      const t0 = new Date(now);
+      t0.setHours(0, 0, 0, 0);
+      const elapsed = Math.max(
+        0,
+        Math.min(pLen, Math.round((t0 - pStart) / one) + 1)
+      );
+      const val = (i) =>
+        this._habitDayValue(
+          days,
+          this._calKey(new Date(pStart.getTime() + i * one)),
+          cfg
+        );
+      let check = 0;
+      let total = 0;
+      for (let i = 0; i < elapsed; i++) {
+        const v = val(i);
+        if (v > 0) check += 1;
+        total += v;
+      }
+      const goal = cfg.goal || 1;
+      const ratioOf = (cum) =>
+        cfg.dir === "bad" ? 1 - cum / goal : cum / goal;
+      /* 天数计法的「累计」是天数（有记录 +1），不是次数 / 分钟 */
+      const cumOf = (i) =>
+        cfg.period !== "day" && cfg.goalUnit === "days"
+          ? val(i) > 0
+            ? 1
+            : 0
+          : val(i);
+
+      let rate = null;
+      let miss = null;
+      if (cfg.period === "day") {
+        /* 日目标：单元 = 天。今天还在过，只结算今天之前的日子 */
+        const settled = Math.max(0, elapsed - 1);
+        miss = 0;
+        if (settled > 0) {
+          let s = 0;
+          for (let i = 0; i < settled; i++) {
+            s += ratioOf(val(i));
+            if (!this._habitPeriodAchieved(cfg, val(i))) miss += 1;
+          }
+          rate = Math.round((s / settled) * 100);
+        } else {
+          rate = Math.round(ratioOf(val(0)) * 100);
+        }
+      } else if (cfg.period === "week") {
+        /* 周目标：单元 = 周。只有**完整落在本周期内**且不晚于当前周的周才结算 */
+        const wkMap = new Map();
+        for (let i = 0; i < elapsed; i++) {
+          const d = new Date(pStart.getTime() + i * one);
+          const wk = this._calKey(this._calTabWeekStartDate(d));
+          if (!wkMap.has(wk)) wkMap.set(wk, { start: i, cum: 0, full: false });
+          wkMap.get(wk).cum += cumOf(i);
+        }
+        wkMap.forEach((info) => {
+          const ws = this._calTabWeekStartDate(
+            new Date(pStart.getTime() + info.start * one)
+          );
+          info.full = ws.getTime() + 7 * one <= pStart.getTime() + pLen * one;
+        });
+        const curKey = this._calKey(this._calTabWeekStartDate(t0));
+        let s = 0;
+        let n = 0;
+        miss = 0;
+        wkMap.forEach((info, key) => {
+          if (key === curKey || !info.full) return;
+          s += ratioOf(info.cum);
+          n += 1;
+          if (!this._habitPeriodAchieved(cfg, info.cum)) miss += 1;
+        });
+        if (n > 0) rate = Math.round((s / n) * 100);
+        else {
+          const cur = wkMap.get(curKey);
+          rate = Math.round(ratioOf(cur ? cur.cum : 0) * 100);
+        }
+      } else {
+        /* 月目标：本周期本身就是当月，只有进度没有结算 */
+        let cum = 0;
+        for (let i = 0; i < elapsed; i++) cum += cumOf(i);
+        rate = Math.round(ratioOf(cum) * 100);
+        miss = 0;
+      }
+      return { check, total, rate, miss, days: elapsed };
+    }
+
+    /* 当前连续：按各自周期结算 —— 日目标数天、周目标数周、月目标数月。
+       本期还没达成不算断（从上一期接着数）；坏习惯「还没超标 = 达标」。
+       返回 { n, unit }，unit 是「天 / 周 / 月」，显示时直接用。 */
+    _habitStreak(days, year, cfg) {
+      const one = 86400000;
+      if (cfg.period === "day") {
+        const okDay = (d) =>
+          this._habitPeriodAchieved(
+            cfg,
+            this._habitDayValue(days, this._calKey(d), cfg)
+          );
         const t = new Date();
         t.setHours(0, 0, 0, 0);
         let cur = t;
-        if (!days[this._calKey(cur)]) cur = new Date(t.getTime() - one);
+        if (!okDay(cur)) cur = new Date(t.getTime() - one);
         let n = 0;
         /* 上限只是兜底：万一日后数据串成环，别在这里转死 */
-        while (n < 400 && days[this._calKey(cur)]) {
+        while (n < 4000 && okDay(cur)) {
           n += 1;
           cur = new Date(cur.getTime() - one);
         }
         return { n, unit: "天" };
       }
-      const weeks = this._habitWeeks(days, year);
-      let cur = this._calTabWeekStartDate(new Date());
-      if ((weeks[this._calKey(cur)] || 0) < target) {
-        cur = new Date(cur.getTime() - 7 * one);
+      if (cfg.period === "week") {
+        const okWeek = (ws) =>
+          this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(days, cfg, ws, 7)
+          );
+        let cur = this._calTabWeekStartDate(new Date());
+        if (!okWeek(cur)) cur = new Date(cur.getTime() - 7 * one);
+        let n = 0;
+        while (n < 400 && okWeek(cur)) {
+          n += 1;
+          cur = new Date(cur.getTime() - 7 * one);
+        }
+        return { n, unit: "周" };
+      }
+      /* 月目标：从本月往前数 */
+      const okMonth = (y, m) => {
+        const dim = new Date(y, m + 1, 0).getDate();
+        return this._habitPeriodAchieved(
+          cfg,
+          this._habitPeriodSum(days, cfg, new Date(y, m, 1), dim)
+        );
+      };
+      let cy = new Date().getFullYear();
+      let cm = new Date().getMonth();
+      if (!okMonth(cy, cm)) {
+        cm -= 1;
+        if (cm < 0) {
+          cm = 11;
+          cy -= 1;
+        }
       }
       let n = 0;
-      while (n < 400 && (weeks[this._calKey(cur)] || 0) >= target) {
+      while (n < 400 && okMonth(cy, cm)) {
         n += 1;
-        cur = new Date(cur.getTime() - 7 * one);
+        cm -= 1;
+        if (cm < 0) {
+          cm = 11;
+          cy -= 1;
+        }
       }
-      return { n, unit: "周" };
+      return { n, unit: "月" };
     }
 
-    /* 这一年里最长的一串：每天目标 → 连续天数；每周 N 天目标 → 连续周数 */
-    _habitLongest(days, year, target) {
+    /* 这一年里最长的一串：日目标数天、周目标数周、月目标数月 */
+    _habitLongest(days, year, cfg) {
       let best = 0;
       let run = 0;
-      if (target >= 7) {
+      const one = 86400000;
+      if (cfg.period === "day") {
         const dim = Math.round(
-          (new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / 86400000
+          (new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / one
         );
         for (let i = 0; i < dim; i++) {
-          if (days[this._calKey(new Date(year, 0, 1 + i))]) {
+          const d = new Date(year, 0, 1 + i);
+          if (
+            this._habitPeriodAchieved(
+              cfg,
+              this._habitDayValue(days, this._calKey(d), cfg)
+            )
+          ) {
             run += 1;
             if (run > best) best = run;
           } else {
@@ -4445,19 +4935,40 @@
         }
         return { n: best, unit: "天" };
       }
-      const weeks = this._habitWeeks(days, year);
-      /* 键就是 YYYY-MM-DD，按字符串排序即时间顺序 */
-      Object.keys(weeks)
-        .sort()
-        .forEach((k) => {
-          if (weeks[k] >= target) {
+      if (cfg.period === "week") {
+        /* 与年热力同一套网格起点（周日对齐），扫整年的周 */
+        const gridStart = new Date(year, 0, 1);
+        gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+        const total = Math.ceil(
+          (Math.round((new Date(year, 11, 31) - gridStart) / one) + 1) / 7
+        );
+        for (let w = 0; w < total; w++) {
+          const cum = this._habitPeriodSum(
+            days,
+            cfg,
+            new Date(gridStart.getTime() + w * 7 * one),
+            7
+          );
+          if (this._habitPeriodAchieved(cfg, cum)) {
             run += 1;
             if (run > best) best = run;
           } else {
             run = 0;
           }
-        });
-      return { n: best, unit: "周" };
+        }
+        return { n: best, unit: "周" };
+      }
+      for (let m = 0; m < 12; m++) {
+        const dim = new Date(year, m + 1, 0).getDate();
+        const cum = this._habitPeriodSum(days, cfg, new Date(year, m, 1), dim);
+        if (this._habitPeriodAchieved(cfg, cum)) {
+          run += 1;
+          if (run > best) best = run;
+        } else {
+          run = 0;
+        }
+      }
+      return { n: best, unit: "月" };
     }
 
     /* 习惯视图主体：顶部「今日完成 x / y」+ 进度条，然后一个习惯一张卡，
@@ -4480,33 +4991,69 @@
       }
 
       let doneCount = 0;
-      const cards = types.map((type) => {
+      const cardHtml = (type) => {
         const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
-        /* 这个习惯自己的配置：单位（次数 / 分钟）+ 5 档门槛 + 目标频率（每周几天） */
+        /* 这个习惯自己的目标模型：单位 × 方向（好/坏）× 周期（日/周/月）× 目标值 */
         const cfg = this._habitConfig(type);
-        const target = cfg.target;
         /* 卡上显示的名字：配了别名就用别名（类型名是数据层的，改不得） */
         const label = cfg.alias || type;
         const { days, totalCnt, totalMin } = this._habitYearData(type, year);
-        /* 总览里这一项算不算达成：每天目标看今天记没记；每周 N 天目标看本周够不够 N 天 */
-        const achieved =
-          target >= 7
-            ? !!days[todayKey]
-            : this._habitWeekDone(days, this._calTabWeekStartDate(new Date())) >= target;
+        const dayVal = (d) => this._habitDayValue(days, this._calKey(d), cfg);
+
+        /* 总览里这一项算不算达成：按各自周期结算 —— 日目标看今天、
+           周目标看本周、月目标看本月（好习惯 ≥ 目标，坏习惯 < 目标） */
+        let achieved = false;
+        if (cfg.period === "day") {
+          achieved = this._habitPeriodAchieved(cfg, dayVal(new Date()));
+        } else if (cfg.period === "week") {
+          achieved = this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(days, cfg, this._calTabWeekStartDate(new Date()), 7)
+          );
+        } else {
+          achieved = this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(
+              days,
+              cfg,
+              new Date(year, now.getMonth(), 1),
+              new Date(year, now.getMonth() + 1, 0).getDate()
+            )
+          );
+        }
         if (achieved) doneCount += 1;
-        const streak = this._habitStreak(days, year, target);
-        const longest = this._habitLongest(days, year, target);
-        /* 本月：看今天所在的这个月（翻到别的年份时，看那一年的同一个月）。
-           「到今天为止」的天数 × 目标/7 就是这段时间应有的天数 —— 每周 3 天的习惯
-           分母是折算值（19 天 × 3/7 ≈ 8），显示成「2/8」而不是「2/19」。
-           分子也只数到分母那个范围里，免得出现「30/19」这种数。 */
-        const m = now.getMonth();
-        const mDays = new Date(year, m + 1, 0).getDate();
-        const elapsed = year === now.getFullYear() ? now.getDate() : mDays;
-        const mTarget = Math.max(1, Math.round((elapsed * target) / 7));
-        let mDone = 0;
-        for (let d = 1; d <= elapsed; d++) {
-          if (days[this._calKey(new Date(year, m, d))]) mDone += 1;
+        const streak = this._habitStreak(days, year, cfg);
+        const longest = this._habitLongest(days, year, cfg);
+        /* 「本期成绩」一行：日目标 → 本月达标天数 / 已过天数；
+           周目标 → 本周累计 / 目标；月目标 → 本月累计 / 目标 */
+        const fmtN = (n) => Math.round(n * 10) / 10;
+        let statLabel = "本月";
+        let statDone = 0;
+        let statGoal = 0;
+        let statSuffix = "";
+        if (cfg.period === "day") {
+          const elapsed = year === now.getFullYear() ? now.getDate() : new Date(year, now.getMonth() + 1, 0).getDate();
+          let mDone = 0;
+          for (let d = 1; d <= elapsed; d++) {
+            if (this._habitPeriodAchieved(cfg, dayVal(new Date(year, now.getMonth(), d)))) mDone += 1;
+          }
+          statDone = mDone;
+          statGoal = elapsed;
+          statSuffix = " 天";
+        } else if (cfg.period === "week") {
+          statLabel = "本周";
+          statDone = this._habitPeriodSum(days, cfg, this._calTabWeekStartDate(new Date()), 7);
+          statGoal = cfg.goal;
+          statSuffix = cfg.goalUnit === "days" ? " 天" : "";
+        } else {
+          statDone = this._habitPeriodSum(
+            days,
+            cfg,
+            new Date(year, now.getMonth(), 1),
+            new Date(year, now.getMonth() + 1, 0).getDate()
+          );
+          statGoal = cfg.goal;
+          statSuffix = cfg.goalUnit === "days" ? " 天" : "";
         }
         /* 年格子：一整年铺成「列＝周、行＝星期日→六」，月份标在下方 ——
            版式与尺寸照抄统计视图那张「全年记录热力」（1:1 复刻 lumina 贡献图），
@@ -4520,6 +5067,10 @@
         );
         const monthStart = new Array(12).fill(-1);
         const monthEnd = new Array(12).fill(-1);
+        /* 周 / 月目标的格子色按「周期内累计进度」走：按时间顺序扫，
+           周期键（周键 / 月键）一变就把累计清零。日目标用不到累计。 */
+        let cum = 0;
+        let cumKey = "";
         let heatCols = "";
         for (let w = 0; w < weeks; w++) {
           let col = "";
@@ -4531,20 +5082,47 @@
               continue;
             }
             const key = this._calKey(dt);
-            const v = days[key];
-            /* 这一天的「成绩」：按次数（默认）或累计分钟，再比这个习惯的门槛阶梯 */
-            const lvl = v ? habitLevelOf(cfg.steps, cfg.unit === "min" ? v.min : v.cnt) : 0;
+            /* raw = 当天的记录对象（tip 用它的次数 / 分钟）；v = 目标模型的成绩值 */
+            const raw = days[key];
+            const v = dayVal(dt);
+            /* 周期累计：周目标按周重置、月目标按月重置（日目标用不到） */
+            if (cfg.period === "week") {
+              const wk = this._calKey(this._calTabWeekStartDate(dt));
+              if (wk !== cumKey) {
+                cumKey = wk;
+                cum = 0;
+              }
+              cum += cfg.goalUnit === "days" ? (v > 0 ? 1 : 0) : v;
+            } else if (cfg.period === "month") {
+              const mk = key.slice(0, 7);
+              if (mk !== cumKey) {
+                cumKey = mk;
+                cum = 0;
+              }
+              cum += cfg.goalUnit === "days" ? (v > 0 ? 1 : 0) : v;
+            }
+            /* 这一天的等级：日目标比当天值与目标的倍数；
+               周 / 月目标比周期内累计进度的步进带 */
+            const lvl = this._habitLevelOf(cfg, v, cum);
             const mo = dt.getMonth();
             if (monthStart[mo] === -1) monthStart[mo] = w;
             monthEnd[mo] = w;
             const cls = ["north-caltab-habit-cell"];
             if (lvl) cls.push("tt-lv" + lvl);
-            const tip = v
-              ? `${key} · ${this._fmtStatsDur(v.min)} · ${v.cnt} ${this._calUnit()}`
+            const tip = raw
+              ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
               : `${key} · 未记录`;
+            const tipTail =
+              cfg.period === "day"
+                ? this._habitPeriodAchieved(cfg, v)
+                  ? "达标"
+                  : "未达标"
+                : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
             col += `<i class="${cls.join(
               " "
-            )}" data-caltab-habitday="${key}" data-tip="${escapeHtml(tip)}"></i>`;
+            )}" data-caltab-habitday="${key}" data-tip="${escapeHtml(
+              `${tip} · ${tipTail}`
+            )}"></i>`;
           }
           heatCols += `<div class="north-caltab-habit-heatcol">${col}</div>`;
         }
@@ -4558,30 +5136,92 @@
             ).toFixed(2)}%">${name}</span>`;
           })
           .join("");
-        /* 这个习惯自己的等级说明（门槛是每个习惯各配一套，所以说明放各自卡里）：
-           只列启用的档位，色块用该习惯的类型色（卡片上的 --tt-c）。 */
-        const legend = cfg.steps
-          .map((t, i) =>
-            t === "" || t == null
-              ? ""
-              : `<span><i class="north-caltab-habit-cell tt-lv${
-                  i + 1
-                }"></i>等级${i + 1} ≥ ${habitUnitLabel(cfg.unit, t)}</span>`
-          )
-          .join("");
+        /* 等级说明按目标模型生成（色块用该习惯的类型色 --tt-c）：
+           日目标（好）：等级k ≥ k×目标；日目标（坏）：达标 < 目标（不上色），等级k = 超标 k 倍起；
+           周 / 月目标：等级1 = 有记录，等级2~5 = 本期累计 ≥25/50/75/100% 目标 */
+        let legend = "";
+        if (cfg.period === "day") {
+          legend = [1, 2, 3, 4, 5]
+            .map(
+              (k) =>
+                `<span><i class="north-caltab-habit-cell tt-lv${k}"></i>${
+                  cfg.dir === "bad" ? "超标 ≥" : "≥"
+                } ${habitUnitLabel(cfg.unit, fmtN(k * cfg.goal))}</span>`
+            )
+            .join("");
+          if (cfg.dir === "bad") {
+            legend =
+              `<span><i class="north-caltab-habit-cell"></i>达标 &lt; ${habitUnitLabel(
+                cfg.unit,
+                fmtN(cfg.goal)
+              )}</span>` + legend;
+          }
+        } else {
+          const bandLabels = [
+            [1, "有记录"],
+            [2, "≥ 25%"],
+            [3, "≥ 50%"],
+            [4, "≥ 75%"],
+            [5, "≥ 100%"],
+          ];
+          legend = bandLabels
+            .map(
+              ([lv, txt]) =>
+                `<span><i class="north-caltab-habit-cell tt-lv${lv}"></i>等级${lv} ${txt}</span>`
+            )
+            .join("");
+          legend += `<span>（按${cfg.period === "week" ? "周" : "月"}累计${
+            cfg.goalUnit === "days" ? "天数" : ""
+          }，目标 ${fmtN(cfg.goal)}${cfg.goalUnit === "days" ? " 天" : ""}）</span>`;
+        }
+        /* 打卡进度：统计行里一项，详细统计放悬浮气泡。气泡是富文本：
+           本周 / 本月各一行（药丸标签 + 数值加粗，负完成率标红）。
+           只在今年显示。 */
+        let pstatTip = "";
+        if (year === now.getFullYear()) {
+          const line = (label, s) => {
+            const avg = s.days > 0 ? s.total / s.days : 0;
+            const total =
+              cfg.unit === "min" ? this._fmtStatsDur(s.total) : `${fmtN(s.total)} 次`;
+            const avgTxt =
+              cfg.unit === "min" ? this._fmtStatsDur(avg) : `${fmtN(avg)} 次`;
+            const neg = s.rate != null && s.rate < 0;
+            return `<div class="tip-line"><i class="tip-tag">${label}</i>打卡 <b>${s.check}</b> 天 · 完成率 <b${
+              neg ? ' class="neg"' : ""
+            }>${s.rate == null ? "—" : `${s.rate}%`}</b> · 共 <b>${total}</b> · 未达标 <b>${
+              s.miss == null ? "—" : s.miss
+            }</b> 期 · 日均 <b>${avgTxt}</b></div>`;
+          };
+          const wS = this._habitPeriodStats(
+            days,
+            cfg,
+            this._calTabWeekStartDate(new Date()),
+            7,
+            now
+          );
+          const mLen = new Date(year, now.getMonth() + 1, 0).getDate();
+          const mS = this._habitPeriodStats(
+            days,
+            cfg,
+            new Date(year, now.getMonth(), 1),
+            mLen,
+            now
+          );
+          pstatTip = `${line("本周", wS)}${line("本月", mS)}`;
+        }
         return `<div class="north-caltab-habit-card" style="--tt-c:${escapeHtml(color)}">
                 <div class="north-caltab-habit-head">
                     <span class="north-caltab-habit-name"><i class="north-caltab-habit-dot"></i>${escapeHtml(
                       label
-                    )}${
-          target < 7
-            ? `<span class="north-caltab-habit-goal">${habitTargetLabel(target)}</span>`
-            : ""
-        }</span>
+                    )}<span class="north-caltab-habit-goal">${habitGoalText(cfg)}</span></span>
                     <span class="north-caltab-habit-stats">
                         <span>${sicon("iconPlugZap")}连续 <b>${streak.n}</b> ${streak.unit}</span>
                         <span>${sicon("iconStar")}最长 <b>${longest.n}</b> ${longest.unit}</span>
-                        <span>${sicon("iconCalendar")}本月 <b>${mDone}</b>/${mTarget}</span>
+                        <span>${sicon("iconCalendar")}${statLabel} <b>${fmtN(statDone)}</b>/${fmtN(statGoal)}${statSuffix}</span>${
+          pstatTip
+            ? `<span class="north-caltab-habit-progress" data-tip-html="${escapeHtml(pstatTip)}"><svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M4 20V10h3v10H4zm6.5 0V4h3v16h-3zM17 20v-7h3v7h-3z"/></svg>打卡进度</span>`
+            : ""
+        }
                         <span>${sicon("iconCheck")}${totalCnt} ${this._calUnit()} · 共 <b>${this._fmtStatsDur(
           totalMin
         )}</b></span>
@@ -4593,11 +5233,202 @@
                 </div>
                 <div class="north-caltab-habit-legend">${legend}</div>
             </div>`;
-      });
+      };
 
-      /* 顶部那行：习惯里有「每周 N 天」目标的，说「今日完成」就不诚实了 ——
-         这时改成「本期达成」（每天目标看今天、每周目标看本周）。 */
-      const allDaily = types.every((t) => this._habitConfig(t).target >= 7);
+      /* 分组分节：**至少有一个习惯真正进了分组**才启用分节展示 ——
+         只建了组但一个成员都没点进去时（组是空壳），习惯页保持原来的平铺。
+         启用后各组按设置顺序各占一节；**没归组的习惯不装进任何「未分组」面板**，
+         就按原来的样子平铺，排在各分组后面 —— 没分组 = 正常展示。
+         顶部总览仍然统计全部习惯。 */
+      const groupNames = this._habitGroupList();
+      let bodyHtml;
+      const grouped = [];
+      let groupedCount = 0;
+      groupNames.forEach((gname) => {
+        const members = types.filter((t) => this._habitGroupOf(t) === gname);
+        if (!members.length) return;
+        grouped.push({ name: gname, members });
+        groupedCount += members.length;
+      });
+      /* 组合本周进度：周期 = 当前周（与「每周 N 天」目标同一套口径，_calTabWeekStartDate）。
+         单个习惯：应完成 = 本周已过天数 × 目标/7（折算，和月度分母同一算法），
+         完成天数只数到今天；组合完成率 = 各习惯已完成 ÷ 应完成 求和。
+         只在「今年」显示 —— 翻到别的年份时「本周剩余」没有意义。 */
+      const isThisYear = year === now.getFullYear();
+      /* 收起 / 展开共用的小箭头（内联 path，不依赖思源图标清单） */
+      const chevSvg =
+        '<svg class="north-caltab-habit-chev" viewBox="0 0 24 24" width="12" height="12"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      const leftLabel = (left) => (left > 0 ? `剩余 ${left} 天` : "最后 1 天");
+
+      /* 每个习惯「自己那个周期」的当前进度：
+         日目标 → 本周达标天数 / 本周已过天数；周目标 → 本周累计 / 目标；
+         月目标 → 本月累计 / 目标。分组汇总按各习惯自己的周期算，
+         所以汇总条标题是「本期」而不是「本周」。 */
+      const progOf = (type) => {
+        const cfg = this._habitConfig(type);
+        const { days } = this._habitYearData(type, year);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const ws = this._calTabWeekStartDate(today);
+        const wElapsed = Math.min(
+          7,
+          Math.max(1, Math.round((today - ws) / 86400000) + 1)
+        );
+        if (cfg.period === "day") {
+          let done = 0;
+          for (let i = 0; i < wElapsed; i++) {
+            const d = new Date(ws);
+            d.setDate(ws.getDate() + i);
+            if (
+              this._habitPeriodAchieved(
+                cfg,
+                this._habitDayValue(days, this._calKey(d), cfg)
+              )
+            )
+              done += 1;
+          }
+          return {
+            done,
+            goal: wElapsed,
+            pct: Math.min(100, Math.round((done / wElapsed) * 100)),
+            suffix: " 天",
+            left: 7 - wElapsed,
+          };
+        }
+        const cum =
+          cfg.period === "week"
+            ? this._habitPeriodSum(days, cfg, ws, 7)
+            : this._habitPeriodSum(
+                days,
+                cfg,
+                new Date(today.getFullYear(), today.getMonth(), 1),
+                today.getDate()
+              );
+        return {
+          done: cum,
+          goal: cfg.goal,
+          pct: Math.min(100, Math.round((cum / (cfg.goal || 1)) * 100)),
+          suffix: cfg.goalUnit === "days" ? " 天" : "",
+          left: 7 - wElapsed,
+        };
+      };
+      const fmtP = (n) => Math.round(n * 10) / 10;
+
+      /* 组合统计：完成率 = 各习惯自己周期进度的平均值；卡与展开节共用 */
+      const gstats = (members) => {
+        let s = 0;
+        members.forEach((t) => {
+          s += progOf(t).pct;
+        });
+        return {
+          rate: members.length ? Math.round(s / members.length) : 0,
+          left: progOf(members[0]).left,
+        };
+      };
+
+      /* 迷你进度行：名称 / 类型色进度条 / 百分比 / 本期进度÷目标 */
+      const miniRow = (t) => {
+        const w = progOf(t);
+        const color = this._colorOf(t) || DEFAULT_TYPE_COLOR;
+        return `<div class="north-caltab-habit-gsum-item" style="--tt-c:${escapeHtml(color)}">
+                    <span class="north-caltab-habit-gsum-name">${escapeHtml(
+                      this._habitConfig(t).alias || t
+                    )}</span>
+                    <div class="north-caltab-habit-gsum-track"><i style="width:${w.pct}%"></i></div>
+                    <span class="north-caltab-habit-gsum-pct">${w.pct}%</span>
+                    <span class="north-caltab-habit-gsum-frac">${fmtP(w.done)}/${fmtP(
+          w.goal
+        )}${w.suffix}</span>
+                </div>`;
+      };
+
+      /* 展开态：节头下那条汇总 */
+      const gsumHtml = (members) => {
+        const s = gstats(members);
+        return `<div class="north-caltab-habit-gsum">
+                <div class="north-caltab-habit-gsum-row">
+                    <span class="north-caltab-habit-gsum-label">本期</span>
+                    <b class="north-caltab-habit-gsum-rate">${s.rate}%</b>
+                    <div class="north-caltab-habit-gsum-track is-main"><i style="width:${s.rate}%"></i></div>
+                    <span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>
+                </div>
+                <div class="north-caltab-habit-gsum-items">${members
+                  .map(miniRow)
+                  .join("")}</div>
+            </div>`;
+      };
+
+      /* 收起态紧凑卡：整卡点击展开（data-habitgrp-toggle），
+         卡上 = 组名 + 鼓励语 + 完成率 + 剩余天数 + 每个习惯的迷你进度 */
+      const gcardHtml = (g) => {
+        const s = gstats(g.members);
+        const desc = this._habitGroupDesc(g.name);
+        return `<div class="north-caltab-habit-gcard" data-habitgrp-toggle="${escapeHtml(
+          g.name
+        )}">
+                <div class="north-caltab-habit-gcard-head">
+                    <b class="north-caltab-habit-gcard-rate">${s.rate}%</b>
+                    <span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>
+                    ${chevSvg}
+                </div>
+                <div class="north-caltab-habit-gcard-name">${escapeHtml(g.name)}</div>
+                ${
+                  desc
+                    ? `<div class="north-caltab-habit-gcard-desc">${escapeHtml(desc)}</div>`
+                    : ""
+                }
+                <div class="north-caltab-habit-gsum-items">${g.members
+                  .map(miniRow)
+                  .join("")}</div>
+            </div>`;
+      };
+
+      /* 展开态节：节头可点回收起（同一个 data-habitgrp-toggle） */
+      const secHtml = (g) =>
+        `<div class="north-caltab-habit-sec">
+                <div class="north-caltab-habit-sec-head" data-habitgrp-toggle="${escapeHtml(
+                  g.name
+                )}"><span class="north-caltab-habit-sec-name">${escapeHtml(
+          g.name
+        )}</span><span class="north-caltab-habit-sec-count">${g.members.length} 个习惯</span>${
+          this._habitGroupDesc(g.name)
+            ? `<span class="north-caltab-habit-sec-desc">${escapeHtml(
+                this._habitGroupDesc(g.name)
+              )}</span>`
+            : ""
+        }<span class="north-caltab-habit-sec-chev">${chevSvg}</span></div>
+                ${isThisYear ? gsumHtml(g.members) : ""}
+                ${g.members.map(cardHtml).join("")}
+            </div>`;
+
+      if (!groupedCount) {
+        bodyHtml = types.map(cardHtml).join("");
+      } else {
+        /* 收起的组排成自适应卡片网格（宽屏三列、窄屏自动降列），
+           展开的组按原样整节展示，各自保持设置里的组顺序 */
+        const cards = [];
+        const secs = [];
+        grouped.forEach((g) => {
+          /* 历史年份一律走展开态 —— 那年没有「本周」，卡片上的进度没有意义 */
+          if (isThisYear && !this._habitGroupOpen(g.name))
+            cards.push(gcardHtml(g));
+          else secs.push(secHtml(g));
+        });
+        /* 没归组的习惯：正常卡片直接垫在分组后面，不套节 */
+        const rest = types.filter(
+          (t) => !grouped.some((g) => g.members.indexOf(t) >= 0)
+        );
+        bodyHtml =
+          (cards.length
+            ? `<div class="north-caltab-habit-gcards">${cards.join("")}</div>`
+            : "") +
+          secs.join("") +
+          rest.map(cardHtml).join("");
+      }
+
+      /* 顶部那行：只要有一个习惯不是日目标，说「今日完成」就不诚实了 ——
+         这时改成「本期达成」（日目标看今天、周目标看本周、月目标看本月）。 */
+      const allDaily = types.every((t) => this._habitConfig(t).period === "day");
       const pct = Math.round((doneCount / types.length) * 100);
       return `<div class="north-caltab-habit">
             <div class="north-caltab-habit-sum">
@@ -4606,7 +5437,7 @@
                 } <b>${doneCount}</b> / ${types.length}</span>
                 <div class="north-caltab-habit-sum-track"><i style="width:${pct}%"></i></div>
             </div>
-            ${cards.join("")}
+            ${bodyHtml}
         </div>`;
     }
 
@@ -5709,6 +6540,20 @@
           }
           return;
         }
+        /* 习惯分组卡 / 节头：展开或收起该分组。状态落盘（habitGroupExpanded），
+           下次回来保持；重绘整个标签页让卡片与节两种形态即时切换 */
+        const grpToggle =
+          e.target.closest && e.target.closest("[data-habitgrp-toggle]");
+        if (grpToggle) {
+          const name = grpToggle.dataset.habitgrpToggle;
+          const openMap = Object.assign({}, this.data.habitGroupExpanded || {});
+          if (openMap[name]) delete openMap[name];
+          else openMap[name] = true;
+          this.data.habitGroupExpanded = openMap;
+          this._persist("保存习惯分组展开");
+          this._paintCalendarTab(container);
+          return;
+        }
         /* 习惯格子：跳到那一天的日视图（和统计柱子走同一条路，
            都是「点一个日期 → 去那一天看看」） */
         const habitCell =
@@ -6140,18 +6985,30 @@
       };
       const show = (target) => {
         const text = target.getAttribute("data-tip");
-        if (!text) return;
+        const html = target.getAttribute("data-tip-html");
+        if (!text && !html) return;
         clearTimeout(timer);
         /* 轻微延迟：快速划过一排日期格时不会连闪 */
         timer = setTimeout(() => {
-          tip.textContent = text;
+          /* 富文本 tip（data-tip-html）走 innerHTML：两行打卡进度那种带标签药丸、
+             数值加粗的排版；普通 tip 仍是纯文本单行。都是插件自己拼的串，无注入面。 */
+          if (html) {
+            tip.innerHTML = html;
+            tip.classList.add("is-multiline");
+          } else {
+            tip.textContent = text;
+            tip.classList.toggle("is-multiline", text.indexOf("\n") >= 0);
+          }
           tip.classList.add("is-visible");
           this._placeTooltip(tip, target);
         }, 90);
       };
 
+      /* data-tip（纯文本）与 data-tip-html（富文本）两种属性都能触发气泡 */
       root.addEventListener("mouseover", (e) => {
-        const target = e.target.closest && e.target.closest("[data-tip]");
+        const target =
+          e.target.closest &&
+          e.target.closest("[data-tip],[data-tip-html]");
         if (!target || !root.contains(target)) {
           if (owner) {
             owner = null;
@@ -6164,7 +7021,9 @@
         show(target);
       });
       root.addEventListener("mouseout", (e) => {
-        const target = e.target.closest && e.target.closest("[data-tip]");
+        const target =
+          e.target.closest &&
+          e.target.closest("[data-tip],[data-tip-html]");
         if (!target) return;
         const next = e.relatedTarget;
         /* 在同一个格子内部移动（div → span）不算离开 */
