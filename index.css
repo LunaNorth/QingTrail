@@ -347,6 +347,192 @@
   border-radius: 3px;
 }
 
+/* 习惯设置：上面一行类型芯片，下面是「挑中的习惯」各自的门槛配置。
+   放在「习惯类型」那一行的下面，所以左右内边距跟 .tt-row 的 18px 对齐。 */
+.tt-habitpick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+.tt-habitpick__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tt-habitpick__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.tt-habitpick__chip:hover {
+  background: var(--b3-list-hover);
+}
+.tt-habitpick__chip.on {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+  background: color-mix(in srgb, var(--b3-theme-primary) 12%, transparent);
+  color: color-mix(in srgb, var(--b3-theme-primary) 80%, var(--b3-theme-on-surface));
+}
+.tt-habitpick__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.tt-habitpick__count {
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.tt-habitpick__chip.on .tt-habitpick__count {
+  color: inherit;
+  opacity: 0.75;
+}
+.tt-habitpick__empty {
+  padding: 2px 0 6px;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 门槛配置区：一段说明 + 每个习惯一个小盒子 */
+.tt-habitpick__hint {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--b3-theme-on-surface-light);
+}
+.tt-habitpick__cfgs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tt-habitpick__cfg {
+  padding: 9px 11px 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 8px;
+}
+.tt-habitpick__cfghead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 侧栏那种窄面板下整行会自动换行，不会把里面挤爆 */
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.tt-habitpick__cfghead .tt-habitpick__name {
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 别名输入：占位符就是类型名（留空 = 卡片上就用类型名） */
+.tt-habitpick__alias {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.tt-habitpick__alias input {
+  width: 96px;
+  padding: 2px 6px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 5px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.tt-habitpick__alias input:focus {
+  outline: none;
+  border-color: var(--b3-theme-primary);
+}
+/* 盒子头右侧：「目标 [下拉]」+「次数 | 分钟」，整体靠右 */
+.tt-habitpick__cfgright {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.tt-habitpick__goallabel {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 单位切换「次数 | 分钟」：等宽两格 */
+.tt-habitpick__units {
+  display: inline-flex;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tt-habitpick__unit {
+  padding: 2px 10px;
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11.5px;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.tt-habitpick__unit + .tt-habitpick__unit {
+  border-left: 1px solid var(--b3-border-color);
+}
+.tt-habitpick__unit:hover {
+  background: var(--b3-list-hover);
+}
+.tt-habitpick__unit.on {
+  background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+  color: var(--b3-theme-primary);
+}
+/* 5 档门槛：色块预览 + 「等级N ≥」+ 数字框；空着 = 那一档不启用 */
+.tt-habitpick__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.tt-habitpick__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+.tt-habitpick__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.tt-habitpick__step input {
+  width: 44px;
+  padding: 2px 5px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 5px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 11.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+.tt-habitpick__step input:focus {
+  outline: none;
+  border-color: var(--b3-theme-primary);
+}
+/* 数字框的上下箭头在这么小的框里很挤，去掉（还是要能直接打字） */
+.tt-habitpick__step input::-webkit-outer-spin-button,
+.tt-habitpick__step input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* ===================== 设置弹窗（左侧导航 + 右侧内容） =====================
    把侧边栏 Dock 里的设置视图抽出来，做成思源原生设置弹窗那种版式。
    层级刻意低于类型管理弹窗（.tt-modal = 9999）—— 设置里的「类型管理」
@@ -2930,6 +3116,251 @@
   color: var(--b3-theme-on-surface-light);
   padding: 32px 0;
   font-size: 13px;
+}
+
+/* ===== 习惯视图（表格旁边的段位）：一个挑中的类型一张卡，一年铺成 12 个月 =====
+   数据口径见 index.js 的 _buildCalendarHabitHtml：某天的格子按当天该类型记录的
+   **合计时长**落到 5 级（HABIT_LEVELS 的 30/60/90/120 分门槛），颜色取该类型的
+   配色 —— 卡片上用内联的 --tt-c 传进来，深浅都由它混出来，换类型色不用改样式。
+   格子是 12px 见方、2px 间距的圆角小方块；列＝周、行＝星期日→六。 */
+.north-caltab-habit {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.north-caltab-habit::-webkit-scrollbar {
+  display: none;
+}
+/* 顶部「今日完成 x / y」+ 一条很细的进度条 */
+.north-caltab-habit-sum {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.north-caltab-habit-sum-text {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface);
+  white-space: nowrap;
+}
+.north-caltab-habit-sum-text b {
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-sum-track {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 8%, transparent);
+  overflow: hidden;
+}
+.north-caltab-habit-sum-track i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--b3-theme-primary);
+  transition: width 0.2s ease;
+}
+/* 一个习惯一张卡。
+   **卡片自己不染色**：热力图里该有颜色的只有格子，卡底铺类型色会整片泛色、
+   把格子的深浅压糊（用户明确要求去掉）。所以这里就是「白底 + 一条淡边」——
+   与统计视图那张全年热力的外框（.north-caltab-stats-section）同一套写法。 */
+.north-caltab-habit-card {
+  flex: 0 0 auto;
+  padding: 12px 16px 14px;
+  border-radius: 8px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.north-caltab-habit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.north-caltab-habit-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 目标不是「每天」时，名字后面挂一枚小标（每天是默认值，不必占位置） */
+.north-caltab-habit-goal {
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 12%, transparent);
+  color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 70%, var(--b3-theme-on-surface));
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+/* 类型色的小方块，与表格视图类型胶囊同源（都是 --tt-c） */
+.north-caltab-habit-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--tt-c, var(--b3-theme-primary));
+  flex: 0 0 auto;
+}
+.north-caltab-habit-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-stats b {
+  font-weight: 600;
+  color: var(--b3-theme-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-habit-sicon {
+  vertical-align: -2px;
+  margin-right: 3px;
+  opacity: 0.85;
+}
+/* 年格子：一整年铺成「列＝周、行＝星期日→六」，月份标在下方 ——
+   版式与尺寸**镜像统计视图那张「全年记录热力」**（.north-caltab-stats-heat*，
+   同样是 1:1 复刻 lumina 贡献图的几何：列距 4px、行距 3px、格子正方）。
+   改一处请对照着改另一处，两边才一直是同一种观感。 */
+.north-caltab-habit-heat {
+  display: flex;
+  flex-direction: column;
+}
+.north-caltab-habit-heatcols {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.north-caltab-habit-heatcol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* 月份标签：按「那一月占的周列」居中，绝对定位（left 的百分比由 JS 算） */
+.north-caltab-habit-heatmonths {
+  position: relative;
+  margin-top: 8px;
+  height: 16px;
+  width: 100%;
+}
+.north-caltab-habit-heatmonth {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+.north-caltab-habit-cell {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1; /* 正方：宽度由 flex 决定，高度跟着走，铺满整行 */
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+}
+/* 年外的日子（第一周开头 / 最后一周结尾）：**照样补一个格子**，只是更淡 ——
+   与统计那张热力的 .is-empty 处理一致（同底色 + opacity 0.5）。
+   早先写成完全透明，结果年初年末各缺一角、看着像被啃掉，用户指出来了。 */
+.north-caltab-habit-cell.is-blank {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  opacity: 0.5;
+}
+/* 5 级深浅：都是「类型色 + 背景」混出来的，换类型色自动跟着变。
+   这一组是**共用的**（习惯格子、卡片里的等级说明、设置里的色块预览都用 .tt-lv1..5），
+   lv1 最浅、lv5 就是类型色本身。定义在 .north-caltab-habit-cell 之后，
+   同特异性靠「后写的赢」压掉基础底色。 */
+.tt-lv1 {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 22%, var(--b3-theme-background));
+}
+.tt-lv2 {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 42%, var(--b3-theme-background));
+}
+.tt-lv3 {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 62%, var(--b3-theme-background));
+}
+.tt-lv4 {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 82%, var(--b3-theme-background));
+}
+.tt-lv5 {
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+/* 有记录的那天可点（跳到那天的日视图）：悬停放一下 + 一圈同色描边，
+   与统计热力那张的悬停同一个手感（缩放 + 1px 环）。 */
+.north-caltab-habit-cell[data-caltab-habitday] {
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.north-caltab-habit-cell[data-caltab-habitday]:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tt-c) 55%, transparent);
+}
+/* 今天那格**不做任何标记**：之前给它描过一圈，用户说像「被选中」、不好看。
+   统计视图那张热力也没有今天的标记，两边保持一致；要看今天在哪天，悬停看气泡。 */
+/* 等级说明：现在放在**各自的卡片里**（门槛是每个习惯各配一套，说明没法共用） */
+.north-caltab-habit-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.north-caltab-habit-legend .north-caltab-habit-cell {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+/* 空态：还没挑习惯时给一句指路 + 一个直达设置的按钮 */
+.north-caltab-habit-empty {
+  margin: auto;
+  padding: 40px 0;
+  text-align: center;
+}
+.north-caltab-habit-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  margin-bottom: 6px;
+}
+.north-caltab-habit-empty-desc {
+  max-width: 380px;
+  margin: 0 auto 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-empty-btn {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--b3-theme-primary);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 /* ===== 统计视图（第五段位）：版式参考 lumina 统计页 =====

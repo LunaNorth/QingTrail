@@ -28,9 +28,52 @@
   /* 日历标签页：addTab 注册用的类型名；openTab 时以 name + 该值作为 custom.id */
   const CAL_TAB_TYPE = "TimeTrailCalendar";
 
-  /* 日历标签页里已经接了视图的段位。六个都接上了 ——
+  /* 日历标签页里已经接了视图的段位。七个都接上了 ——
      以后再加段位，不在这里的点了只切高亮、不换内容。 */
-  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "stats"];
+  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "stats"];
+
+  /* ---- 习惯视图 ----
+     习惯 = 用户从「记录类型」里自己挑出来的几个（挑哪些存在 settings.habitTypes，
+     是个类型名数组）。挑中的类型才追踪，没挑的不算 —— 不然「记录」这种量大又杂的
+     类型会把习惯页塞满，看不出什么。
+     某一天的表现 = 当天该类型**记了几次**（或累计多少分钟，两种量纲可选），
+     再拿这个数去比该习惯自己的**门槛阶梯**：从最高档往下比，先满足的那档就是
+     这一天的等级（1~5，级数越高格子越深）；一档都没满足 → 0（不上色）。
+     阶梯每个习惯各配一套（settings.habitConfig），默认「按次数 1/2/3/4/5」。
+     空门槛 = 那一档不启用 —— 只填「等级5 ≥ 1 次」就是「记一次就算完成」的打卡玩法。 */
+  const HABIT_UNITS = [
+    { value: "count", label: "次数" },
+    { value: "min", label: "分钟" },
+  ];
+  const HABIT_DEFAULT_STEPS = { count: [1, 2, 3, 4, 5], min: [30, 60, 90, 120, 150] };
+  /* 目标频率：每周要完成几天，7 = 每天（默认）。
+     默认值存在 `data.habitConfig[类型].target`（1..7）。
+     非每天的习惯**不该因为「今天没记」被判失败**，所以：
+     - 连续 / 最长按**周**算（那一周记够 N 天就算达成，本周还没过完不算断）；
+     - 月度完成度的分母按目标折算（19 天 × 3/7 ≈ 8 天），显示成「2/8」而不是「2/19」；
+     - 顶部总览里，这类习惯算「本期达成」而不是「今日完成」。 */
+  const HABIT_TARGET_OPTIONS = [
+    { value: "7", label: "每天" },
+    { value: "6", label: "每周 6 天" },
+    { value: "5", label: "每周 5 天" },
+    { value: "4", label: "每周 4 天" },
+    { value: "3", label: "每周 3 天" },
+    { value: "2", label: "每周 2 天" },
+    { value: "1", label: "每周 1 天" },
+  ];
+  const habitTargetLabel = (t) => (t >= 7 ? "每天" : `每周 ${t} 天`);
+  /* 门槛的单位后缀：3 次 / 30 分 */
+  const habitUnitLabel = (unit, v) => (unit === "min" ? `${v} 分` : `${v} 次`);
+  /* 阶梯判定：value 落在哪一档（1..5）；0 / 空返回 0（不上色） */
+  const habitLevelOf = (steps, value) => {
+    if (!value) return 0;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const t = steps[i];
+      if (t === "" || t == null) continue;
+      if (value >= +t) return i + 1;
+    }
+    return 0;
+  };
 
   /* ---- 日历数据源 ----
      lifelog = 我们自己记的 LifeLog 记录（默认，读块属性）；
@@ -846,12 +889,17 @@
             <header class="tt-group__title">控制设置</header>
             <div class="tt-group__card" data-tt-group="control"></div>
           </section>
+          <section class="tt-group">
+            <header class="tt-group__title">习惯设置</header>
+            <div class="tt-group__card" data-tt-group="habit"></div>
+          </section>
         </div>
       `;
       const insertCard = container.querySelector('[data-tt-group="insert"]');
       const appearanceCard = container.querySelector('[data-tt-group="appearance"]');
       const calendarCard = container.querySelector('[data-tt-group="calendar"]');
       const controlCard = container.querySelector('[data-tt-group="control"]');
+      const habitCard = container.querySelector('[data-tt-group="habit"]');
 
       /* —— 插入设置：日记笔记本 —— */
       const notebookRow = this._buildRow({
@@ -1095,9 +1143,175 @@
         })
       );
 
+      /* —— 习惯设置：挑哪些类型当习惯（「习惯」页 = 表格旁边的那个段位） ——
+         不用再开一层弹窗：候选类型直接铺成芯片，点一下加 / 去，立刻落盘并重绘。
+         只有挑中的类型才追踪 —— 「记录」这种量大又杂的类型不会自己挤进来。 */
+      habitCard.appendChild(
+        this._buildRow({
+          title: "习惯类型",
+          desc:
+            "点一下切换。挑中的类型会在「习惯」段位里一个类型一张卡地追踪，下面还能给每个习惯单独配门槛。",
+        })
+      );
+      const habitPick = document.createElement("div");
+      habitPick.className = "tt-habitpick";
+      habitCard.appendChild(habitPick);
+      this._mountHabitPicker(habitPick);
+
       /* 挂载时拉取笔记本列表（传 container 让刷新落在自己这一份上，
          设置面板在设置弹窗中复用（仅此一处）；各自刷新各自那份，不互相抢 this.notebookCddl） */
       this._refreshNotebooks(container);
+    }
+
+    /* 习惯设置的芯片区：把「日历数据里出现过的类型」铺成一行行小芯片，
+       点一下加 / 去。改完立刻落盘 + 重绘日历标签页（开着习惯页时不用手动刷新）。
+       用 onclick（不是 addEventListener）—— 每点一次都会重排这段 HTML，
+       重新赋值监听不会越挂越多。 */
+    _mountHabitPicker(host) {
+      if (!host) return;
+      const picked = new Set(this._habitTypes());
+      const cands = this._habitCandidates();
+      if (!cands.length) {
+        host.innerHTML =
+          '<div class="tt-habitpick__empty">日历数据里还没出现过类型 —— 先记几条再看。</div>';
+        return;
+      }
+      const chips = cands
+        .map(
+          (c) =>
+            `<button class="tt-habitpick__chip${
+              picked.has(c.name) ? " on" : ""
+            }" type="button" data-habit-type="${escapeHtml(c.name)}">
+                <span class="tt-habitpick__dot" style="background:${escapeHtml(c.color)}"></span>
+                <span class="tt-habitpick__name">${escapeHtml(c.name)}</span>
+                <span class="tt-habitpick__count">${c.cnt}</span>
+            </button>`
+        )
+        .join("");
+      /* 挑中的习惯各配一套门槛：单位（次数 / 分钟）+ 5 档门槛，空着 = 那一档不启用。
+         只填「等级5 ≥ 1 次」就是「记一次就算完成」的打卡玩法。 */
+      const cfgs = this._habitTypes()
+        .map((type) => {
+          const cfg = this._habitConfig(type);
+          const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
+          const units = HABIT_UNITS.map(
+            (u) =>
+              `<button class="tt-habitpick__unit${
+                cfg.unit === u.value ? " on" : ""
+              }" type="button" data-habit-unit="${u.value}">${u.label}</button>`
+          ).join("");
+          const steps = cfg.steps
+            .map(
+              (t, i) =>
+                `<label class="tt-habitpick__step"><i class="tt-habitpick__swatch tt-lv${
+                  i + 1
+                }"></i><span>等级${i + 1} ≥</span><input type="number" min="1" max="999" value="${
+                  t === "" ? "" : t
+                }" data-habit-step="${i}" autocomplete="off"></label>`
+            )
+            .join("");
+          return `<div class="tt-habitpick__cfg" data-habit-cfg="${escapeHtml(
+            type
+          )}" style="--tt-c:${escapeHtml(color)}">
+                <div class="tt-habitpick__cfghead">
+                    <span class="tt-habitpick__dot" style="background:${escapeHtml(color)}"></span>
+                    <span class="tt-habitpick__name">${escapeHtml(type)}</span>
+                    <span class="tt-habitpick__cfgright">
+                        <label class="tt-habitpick__alias"><span>别名</span><input type="text" maxlength="16" value="${escapeHtml(
+                          cfg.alias
+                        )}" placeholder="${escapeHtml(type)}" data-habit-alias autocomplete="off"></label>
+                        <span class="tt-habitpick__goallabel">目标</span>
+                        <span class="tt-habitpick__goalslot"></span>
+                        <span class="tt-habitpick__units">${units}</span>
+                    </span>
+                </div>
+                <div class="tt-habitpick__steps">${steps}</div>
+            </div>`;
+        })
+        .join("");
+      host.innerHTML =
+        `<div class="tt-habitpick__chips">${chips}</div>` +
+        (cfgs
+          ? `<div class="tt-habitpick__hint">下面给每个习惯配门槛：当天这个类型达到哪一档就往哪一档上色（从高往低比，先满足的算）。留空 = 那一档不启用 —— 只填「等级5 ≥ 1 次」就是「记一次就算完成」。目标不是「每天」的习惯（例如每周 3 天），连续 / 最长会按「周」算、月度完成度也按目标折算，不会因为当天没记就判失败。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
+          : "");
+      /* 目标频率（每周几天）用现成的自定义下拉 —— 与设置里其它 select 同一个组件；
+         它返回的是 DOM，所以上面先留空位、这里再逐个塞进去 */
+      host.querySelectorAll("[data-habit-cfg]").forEach((box) => {
+        const slot = box.querySelector(".tt-habitpick__goalslot");
+        if (!slot) return;
+        const type = box.dataset.habitCfg;
+        slot.appendChild(
+          this._buildCddl({
+            options: HABIT_TARGET_OPTIONS,
+            value: String(this._habitConfig(type).target),
+            onChange: (v) => {
+              const cfg = this._habitConfig(type);
+              cfg.target = Math.max(1, Math.min(7, +v || 7));
+              this._habitSetConfig(type, cfg);
+              this._refreshCalendarTabs();
+            },
+          })
+        );
+      });
+      /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
+      host.onclick = (e) => {
+        const unitBtn = e.target.closest && e.target.closest("[data-habit-unit]");
+        if (unitBtn) {
+          const box = unitBtn.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          if (cfg.unit === unitBtn.dataset.habitUnit) return;
+          cfg.unit = unitBtn.dataset.habitUnit;
+          /* 换了量纲，门槛跟着换成那套默认值（1/2/3/4/5 次 ↔ 30/60/90/120/150 分） */
+          cfg.steps = HABIT_DEFAULT_STEPS[cfg.unit].slice();
+          this._habitSetConfig(type, cfg);
+          this._mountHabitPicker(host);
+          this._refreshCalendarTabs();
+          return;
+        }
+        const chip = e.target.closest && e.target.closest("[data-habit-type]");
+        if (!chip) return;
+        const name = chip.dataset.habitType;
+        /* 以当前设置为基础改，不依赖 DOM 顺序；Set 保序 → 习惯卡的先后＝点选先后 */
+        const next = new Set(this._habitTypes());
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        this.data.habitTypes = Array.from(next);
+        this._persist("保存习惯类型");
+        this._mountHabitPicker(host);
+        this._refreshCalendarTabs();
+      };
+      /* 文本类输入用 change（失焦 / 回车）触发：免得每敲一个字就重绘一次日历。
+         别名与门槛输入都走这里。 */
+      host.onchange = (e) => {
+        const aliasInput =
+          e.target.closest && e.target.closest("[data-habit-alias]");
+        if (aliasInput) {
+          const box = aliasInput.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          cfg.alias = String(aliasInput.value == null ? "" : aliasInput.value).trim();
+          this._habitSetConfig(type, cfg);
+          aliasInput.value = cfg.alias;
+          this._refreshCalendarTabs();
+          return;
+        }
+        const input = e.target.closest && e.target.closest("[data-habit-step]");
+        if (!input) return;
+        const box = input.closest("[data-habit-cfg]");
+        if (!box) return;
+        const type = box.dataset.habitCfg;
+        const cfg = this._habitConfig(type);
+        const raw = String(input.value == null ? "" : input.value).trim();
+        const v =
+          raw === "" ? "" : Math.max(1, Math.min(999, parseInt(raw, 10) || 1));
+        cfg.steps[+input.dataset.habitStep] = v;
+        this._habitSetConfig(type, cfg);
+        input.value = v === "" ? "" : v;
+        this._refreshCalendarTabs();
+      };
     }
 
     /* ===================== 设置面板通用组件 ===================== */
@@ -1886,9 +2100,9 @@
         this._settingsModal.remove();
         this._settingsModal = null;
       }
-      /* 左侧导航 = 右侧那四个分组本身，点某一项只显示该分组。
+      /* 左侧导航 = 右侧那五个分组本身，点某一项只显示该分组。
          key 必须与 _mountSettingsPanel 里 .tt-group__card 的 data-tt-group
-         取值一一对应（insert / appearance / calendar / control），
+         取值一一对应（insert / appearance / calendar / control / habit），
          对应关系是反查出来的，不依赖分组在 DOM 里的先后顺序。
          icon 一律用思源自带的图标 id（清单见 appearance/icons/<主题>/icon.js），
          写错 id 会渲染成一个空框。 */
@@ -1897,6 +2111,7 @@
         { key: "appearance", label: "视图外观", icon: "iconEye" },
         { key: "calendar", label: "日历设置", icon: "iconCalendar" },
         { key: "control", label: "控制设置", icon: "iconSettings" },
+        { key: "habit", label: "习惯设置", icon: "iconStar" },
       ];
       const modal = document.createElement("div");
       modal.className = "tt-settings-modal";
@@ -3086,6 +3301,8 @@
         return before ? "上个月" : "下个月";
       }
       if (view === "week") return before ? "上一周" : "下一周";
+      /* 习惯视图是一整年铺开的，翻页翻的是年 */
+      if (view === "habit") return before ? "上一年" : "下一年";
       /* 三日与日视图都是「一天一格」地翻，提示语一致 */
       if (view === "three" || view === "day") return before ? "前一天" : "后一天";
       return before ? "上个月" : "下个月";
@@ -4021,6 +4238,378 @@
       };
     }
 
+    /* ============================================================
+       习惯视图（表格旁边的段位）：把「记录类型」当习惯来追踪
+       设置里挑中的每个类型 = 一张卡：标题 + 四个数字 + 一整年的格子。
+       年格子 = 12 个月横向并排，每个月一小块「列＝周、行＝星期（日→六）」的日历
+       （补齐首日前的空位后交给 CSS 的 grid-auto-flow: column 排，见样式表）。
+       某天的格子按当天这个类型**记了几次**（或累计分钟，每个习惯自己在设置里选）
+       比对该习惯的门槛阶梯（HABIT_DEFAULT_STEPS 是默认值，可在设置里逐档改）分 5 级上色，
+       没记录的日子只留一层淡底；格子可点 → 跳到那天的日视图。
+       数据用**全量记录**（不走工具栏的类型筛选）：筛选问的是「这屏看哪些记录」，
+       习惯页问的是「我挑的这几个类型这一年怎么样」—— 被筛掉就看不见自己了。
+       ============================================================ */
+
+    /* 设置里挑中的习惯类型名单；顺手清掉空串与重复 */
+    _habitTypes() {
+      const raw = Array.isArray(this.data.habitTypes) ? this.data.habitTypes : [];
+      const seen = new Set();
+      const list = [];
+      raw.forEach((t) => {
+        const name = String(t == null ? "" : t).trim();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          list.push(name);
+        }
+      });
+      return list;
+    }
+
+    /* 某个习惯的分级配置：{ unit: "count"|"min", steps: [5 个门槛，""=不启用] }。
+       没配过的习惯走默认（按次数 1/2/3/4/5）。steps 存**原始值**：
+       数字 = 门槛、空串 = 这一档不启用；整个 steps 缺失才回落到默认值。 */
+    _habitConfig(type) {
+      const all =
+        this.data.habitConfig && typeof this.data.habitConfig === "object"
+          ? this.data.habitConfig
+          : {};
+      const raw = all[type] && typeof all[type] === "object" ? all[type] : {};
+      const unit = raw.unit === "min" ? "min" : "count";
+      const t = +raw.target;
+      const target = t >= 1 && t <= 7 ? Math.round(t) : 7;
+      /* 别名：只影响习惯卡上显示的名字（类型名是数据层的，改不得）；
+         留空就用类型名本身。 */
+      const alias = String(raw.alias == null ? "" : raw.alias).trim();
+      const src = Array.isArray(raw.steps) ? raw.steps : [];
+      const steps = HABIT_DEFAULT_STEPS[unit].map((d, i) => {
+        const v = src[i];
+        if (v === "" || v === null) return "";
+        return v == null ? d : +v;
+      });
+      return { unit, target, alias, steps };
+    }
+
+    /* 写回某个习惯的分级配置（_persist 存的是整份 settings，新键自动落盘） */
+    _habitSetConfig(type, cfg) {
+      const all = Object.assign({}, this.data.habitConfig || {});
+      const t = +cfg.target;
+      all[type] = {
+        unit: cfg.unit === "min" ? "min" : "count",
+        target: t >= 1 && t <= 7 ? Math.round(t) : 7,
+        alias: String(cfg.alias == null ? "" : cfg.alias).trim(),
+        steps: (Array.isArray(cfg.steps) ? cfg.steps : [])
+          .slice(0, 5)
+          .map((v) => (v === "" || v == null ? "" : +v)),
+      };
+      this.data.habitConfig = all;
+      this._persist("保存习惯分级");
+    }
+
+    /* 可挑的类型 = 数据里**实际出现过**的类型（与工具栏筛选面板同一份口径），
+       按条数从多到少排；一条记录都没有的类型挑来也没意义。 */
+    _habitCandidates() {
+      const count = new Map();
+      (this._calSourceRecords() || []).forEach((r) => {
+        const t = ((r && r.type) || "").trim();
+        if (t) count.set(t, (count.get(t) || 0) + 1);
+      });
+      return Array.from(count.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh"))
+        .map(([name, cnt]) => ({
+          name,
+          cnt,
+          color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+        }));
+    }
+
+    /* 一年的「日期 → 带时长的行」算一次缓存起来，几个习惯共用。
+       _calDayRows 的结果与类型无关（它按整天的记录顺序算时长），所以没必要
+       每个习惯各算一遍；缓存的失效靠两个身份判断：年份 + 数据数组本身
+       （数据一重拉就是新数组，_calSourceRecords() 返回的引用会变）。 */
+    _habitRowsByDate(year) {
+      const src = this._calSourceRecords() || [];
+      const cache = this._habitRowsCache;
+      if (cache && cache.year === year && cache.src === src) return cache.map;
+      const byDate = this._groupByDate(src);
+      const map = {};
+      for (let m = 0; m < 12; m++) {
+        const dim = new Date(year, m + 1, 0).getDate();
+        for (let d = 1; d <= dim; d++) {
+          const key = this._calKey(new Date(year, m, d));
+          const all = byDate[key];
+          if (all && all.length) map[key] = this._calDayRows(all);
+        }
+      }
+      this._habitRowsCache = { year, src, map };
+      return map;
+    }
+
+    /* 某类型一年里每天的表现：{ days: {日期键: {cnt, min}}, totalCnt, totalMin }
+       时长口径就是上面那份缓存（= _calDayRows：显式区间 > 接到下一条 >
+       当天最后一条补默认值），再按类型挑出属于这个习惯的行。 */
+    _habitYearData(type, year) {
+      const map = this._habitRowsByDate(year);
+      const days = {};
+      let totalCnt = 0;
+      let totalMin = 0;
+      Object.keys(map).forEach((key) => {
+        let cnt = 0;
+        let min = 0;
+        map[key].forEach((row) => {
+          const t = row.record && row.record.type ? String(row.record.type).trim() : "";
+          if (t !== type) return;
+          cnt += 1;
+          min += row.dur || 0;
+        });
+        if (cnt) {
+          days[key] = { cnt, min };
+          totalCnt += cnt;
+          totalMin += min;
+        }
+      });
+      return { days, totalCnt, totalMin };
+    }
+
+    /* 按周统计「这一周记了几天」：{ 周起始日期键: 天数 }。
+       周的起止沿用设置里的每周起始日，与日历 / 周视图同一套（_calTabWeekStartDate）。 */
+    _habitWeeks(days, year) {
+      const map = {};
+      const d = new Date(year, 0, 1);
+      const end = new Date(year, 11, 31);
+      while (d <= end) {
+        const key = this._calKey(d);
+        const wk = this._calKey(this._calTabWeekStartDate(d));
+        if (map[wk] == null) map[wk] = 0;
+        if (days[key]) map[wk] += 1;
+        d.setDate(d.getDate() + 1);
+      }
+      return map;
+    }
+
+    /* 某一周记了几天 —— 总览里判断「每周 N 天」这类习惯本期是否达成 */
+    _habitWeekDone(days, weekStart) {
+      let n = 0;
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekStart.getTime() + i * 86400000);
+        if (days[this._calKey(d)]) n += 1;
+      }
+      return n;
+    }
+
+    /* 当前连续：每天目标 → 连续天数（今天还没记就从昨天算起，一天还没过完不算断）；
+       每周 N 天目标 → 连续**周数**（本周还没记够就从上一周算起，一周还没过完不算断）。
+       返回 { n, unit }，unit 是「天」或「周」，显示时直接用。 */
+    _habitStreak(days, year, target) {
+      const one = 86400000;
+      if (target >= 7) {
+        const t = new Date();
+        t.setHours(0, 0, 0, 0);
+        let cur = t;
+        if (!days[this._calKey(cur)]) cur = new Date(t.getTime() - one);
+        let n = 0;
+        /* 上限只是兜底：万一日后数据串成环，别在这里转死 */
+        while (n < 400 && days[this._calKey(cur)]) {
+          n += 1;
+          cur = new Date(cur.getTime() - one);
+        }
+        return { n, unit: "天" };
+      }
+      const weeks = this._habitWeeks(days, year);
+      let cur = this._calTabWeekStartDate(new Date());
+      if ((weeks[this._calKey(cur)] || 0) < target) {
+        cur = new Date(cur.getTime() - 7 * one);
+      }
+      let n = 0;
+      while (n < 400 && (weeks[this._calKey(cur)] || 0) >= target) {
+        n += 1;
+        cur = new Date(cur.getTime() - 7 * one);
+      }
+      return { n, unit: "周" };
+    }
+
+    /* 这一年里最长的一串：每天目标 → 连续天数；每周 N 天目标 → 连续周数 */
+    _habitLongest(days, year, target) {
+      let best = 0;
+      let run = 0;
+      if (target >= 7) {
+        const dim = Math.round(
+          (new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / 86400000
+        );
+        for (let i = 0; i < dim; i++) {
+          if (days[this._calKey(new Date(year, 0, 1 + i))]) {
+            run += 1;
+            if (run > best) best = run;
+          } else {
+            run = 0;
+          }
+        }
+        return { n: best, unit: "天" };
+      }
+      const weeks = this._habitWeeks(days, year);
+      /* 键就是 YYYY-MM-DD，按字符串排序即时间顺序 */
+      Object.keys(weeks)
+        .sort()
+        .forEach((k) => {
+          if (weeks[k] >= target) {
+            run += 1;
+            if (run > best) best = run;
+          } else {
+            run = 0;
+          }
+        });
+      return { n: best, unit: "周" };
+    }
+
+    /* 习惯视图主体：顶部「今日完成 x / y」+ 进度条，然后一个习惯一张卡，
+       最后一条**共用**的等级说明（几个习惯都是「合计时长」分级，说明一条就够）。 */
+    _buildCalendarHabitHtml(year) {
+      const types = this._habitTypes();
+      const todayKey = this._calKey(new Date());
+      const now = new Date();
+      const sicon = (id) =>
+        `<svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#${id}"></use></svg>`;
+
+      if (!types.length) {
+        return `<div class="north-caltab-habit">
+                <div class="north-caltab-habit-empty">
+                    <div class="north-caltab-habit-empty-title">还没有设置习惯</div>
+                    <div class="north-caltab-habit-empty-desc">去「设置 → 习惯设置」里点几个记录类型，挑中的类型会在这里一个类型一张卡地追踪。</div>
+                    <button class="north-caltab-habit-empty-btn" type="button" data-caltab-act="settings">去设置</button>
+                </div>
+            </div>`;
+      }
+
+      let doneCount = 0;
+      const cards = types.map((type) => {
+        const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
+        /* 这个习惯自己的配置：单位（次数 / 分钟）+ 5 档门槛 + 目标频率（每周几天） */
+        const cfg = this._habitConfig(type);
+        const target = cfg.target;
+        /* 卡上显示的名字：配了别名就用别名（类型名是数据层的，改不得） */
+        const label = cfg.alias || type;
+        const { days, totalCnt, totalMin } = this._habitYearData(type, year);
+        /* 总览里这一项算不算达成：每天目标看今天记没记；每周 N 天目标看本周够不够 N 天 */
+        const achieved =
+          target >= 7
+            ? !!days[todayKey]
+            : this._habitWeekDone(days, this._calTabWeekStartDate(new Date())) >= target;
+        if (achieved) doneCount += 1;
+        const streak = this._habitStreak(days, year, target);
+        const longest = this._habitLongest(days, year, target);
+        /* 本月：看今天所在的这个月（翻到别的年份时，看那一年的同一个月）。
+           「到今天为止」的天数 × 目标/7 就是这段时间应有的天数 —— 每周 3 天的习惯
+           分母是折算值（19 天 × 3/7 ≈ 8），显示成「2/8」而不是「2/19」。
+           分子也只数到分母那个范围里，免得出现「30/19」这种数。 */
+        const m = now.getMonth();
+        const mDays = new Date(year, m + 1, 0).getDate();
+        const elapsed = year === now.getFullYear() ? now.getDate() : mDays;
+        const mTarget = Math.max(1, Math.round((elapsed * target) / 7));
+        let mDone = 0;
+        for (let d = 1; d <= elapsed; d++) {
+          if (days[this._calKey(new Date(year, m, d))]) mDone += 1;
+        }
+        /* 年格子：一整年铺成「列＝周、行＝星期日→六」，月份标在下方 ——
+           版式与尺寸照抄统计视图那张「全年记录热力」（1:1 复刻 lumina 贡献图），
+           只是配色换成这个习惯的类型色。年外的日子留空（透明，不占视觉）。 */
+        const yearStart = new Date(year, 0, 1);
+        const gridStart = new Date(yearStart);
+        /* 周日起始，与统计那张热力取周方式一致 */
+        gridStart.setDate(yearStart.getDate() - yearStart.getDay());
+        const weeks = Math.ceil(
+          (Math.round((new Date(year, 11, 31) - gridStart) / 86400000) + 1) / 7
+        );
+        const monthStart = new Array(12).fill(-1);
+        const monthEnd = new Array(12).fill(-1);
+        let heatCols = "";
+        for (let w = 0; w < weeks; w++) {
+          let col = "";
+          for (let d = 0; d < 7; d++) {
+            const dt = new Date(gridStart);
+            dt.setDate(gridStart.getDate() + w * 7 + d);
+            if (dt.getFullYear() !== year) {
+              col += '<i class="north-caltab-habit-cell is-blank"></i>';
+              continue;
+            }
+            const key = this._calKey(dt);
+            const v = days[key];
+            /* 这一天的「成绩」：按次数（默认）或累计分钟，再比这个习惯的门槛阶梯 */
+            const lvl = v ? habitLevelOf(cfg.steps, cfg.unit === "min" ? v.min : v.cnt) : 0;
+            const mo = dt.getMonth();
+            if (monthStart[mo] === -1) monthStart[mo] = w;
+            monthEnd[mo] = w;
+            const cls = ["north-caltab-habit-cell"];
+            if (lvl) cls.push("tt-lv" + lvl);
+            const tip = v
+              ? `${key} · ${this._fmtStatsDur(v.min)} · ${v.cnt} ${this._calUnit()}`
+              : `${key} · 未记录`;
+            col += `<i class="${cls.join(
+              " "
+            )}" data-caltab-habitday="${key}" data-tip="${escapeHtml(tip)}"></i>`;
+          }
+          heatCols += `<div class="north-caltab-habit-heatcol">${col}</div>`;
+        }
+        /* 月份标签按「那一月占的周列」居中，用百分比定位 —— 与统计热力同款算法 */
+        const heatMonths = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
+          .map((name, mi) => {
+            if (monthStart[mi] === -1) return "";
+            const mid = (monthStart[mi] + monthEnd[mi]) / 2;
+            return `<span class="north-caltab-habit-heatmonth" style="left:${(
+              ((mid + 0.5) / weeks) * 100
+            ).toFixed(2)}%">${name}</span>`;
+          })
+          .join("");
+        /* 这个习惯自己的等级说明（门槛是每个习惯各配一套，所以说明放各自卡里）：
+           只列启用的档位，色块用该习惯的类型色（卡片上的 --tt-c）。 */
+        const legend = cfg.steps
+          .map((t, i) =>
+            t === "" || t == null
+              ? ""
+              : `<span><i class="north-caltab-habit-cell tt-lv${
+                  i + 1
+                }"></i>等级${i + 1} ≥ ${habitUnitLabel(cfg.unit, t)}</span>`
+          )
+          .join("");
+        return `<div class="north-caltab-habit-card" style="--tt-c:${escapeHtml(color)}">
+                <div class="north-caltab-habit-head">
+                    <span class="north-caltab-habit-name"><i class="north-caltab-habit-dot"></i>${escapeHtml(
+                      label
+                    )}${
+          target < 7
+            ? `<span class="north-caltab-habit-goal">${habitTargetLabel(target)}</span>`
+            : ""
+        }</span>
+                    <span class="north-caltab-habit-stats">
+                        <span>${sicon("iconPlugZap")}连续 <b>${streak.n}</b> ${streak.unit}</span>
+                        <span>${sicon("iconStar")}最长 <b>${longest.n}</b> ${longest.unit}</span>
+                        <span>${sicon("iconCalendar")}本月 <b>${mDone}</b>/${mTarget}</span>
+                        <span>${sicon("iconCheck")}${totalCnt} ${this._calUnit()} · 共 <b>${this._fmtStatsDur(
+          totalMin
+        )}</b></span>
+                    </span>
+                </div>
+                <div class="north-caltab-habit-heat">
+                    <div class="north-caltab-habit-heatcols">${heatCols}</div>
+                    <div class="north-caltab-habit-heatmonths">${heatMonths}</div>
+                </div>
+                <div class="north-caltab-habit-legend">${legend}</div>
+            </div>`;
+      });
+
+      /* 顶部那行：习惯里有「每周 N 天」目标的，说「今日完成」就不诚实了 ——
+         这时改成「本期达成」（每天目标看今天、每周目标看本周）。 */
+      const allDaily = types.every((t) => this._habitConfig(t).target >= 7);
+      const pct = Math.round((doneCount / types.length) * 100);
+      return `<div class="north-caltab-habit">
+            <div class="north-caltab-habit-sum">
+                <span class="north-caltab-habit-sum-text">${
+                  allDaily ? "今日完成" : "本期达成"
+                } <b>${doneCount}</b> / ${types.length}</span>
+                <div class="north-caltab-habit-sum-track"><i style="width:${pct}%"></i></div>
+            </div>
+            ${cards.join("")}
+        </div>`;
+    }
+
     /* 时间轴视图结构（周 / 三日共用一段代码）：表头（星期 + 日期，今天沿用月视图
        那枚圆角方块徽标）+ 正文（左时间刻度 + N 天列）。
        列数由 --tt-wv-cols 传给样式表，所以「7 列」和「3 列」不需要各写一份 ——
@@ -4613,6 +5202,8 @@
       const isTimeline = view === "week" || view === "three" || view === "day";
       /* 表格视图：当月记录按日分组排成一张表（列＝时间/类型/内容/时长） */
       const isTable = view === "table";
+      /* 习惯视图：挑中的类型一个一张卡 + 一整年的格子（数据用全量记录） */
+      const isHabit = view === "habit";
       const isStats = view === "stats";
       /* 统计视图的周期状态：首次进入给默认值（按年，标题即「N 年」），
          与 Dock 统计互不干扰 */
@@ -4651,6 +5242,16 @@
           monthAnchor.getMonth() + 1
         }月 · ${table.count} ${this._calUnit()}`;
       }
+      /* 习惯视图看的是「一整年」，锚点独立于月 / 日那几个 —— 翻页翻的是年 */
+      const habitYear = isHabit
+        ? this._calTabHabitYear || new Date().getFullYear()
+        : 0;
+      if (isHabit) {
+        const n = this._habitTypes().length;
+        title = n
+          ? `${habitYear}年 · ${n} 个习惯`
+          : `${habitYear}年 · 习惯`;
+      }
 
       /* 月视图才需要算三个月的格子（126 格，每格都要算农历 / 节气），
          时间轴视图下这活儿纯属白干，所以放进分支里 */
@@ -4659,6 +5260,8 @@
         body = this._buildCalendarStatsHtml();
       } else if (isTable) {
         body = table.html;
+      } else if (isHabit) {
+        body = this._buildCalendarHabitHtml(habitYear);
       } else if (isTimeline) {
         const days = this._calTimelineDays(anchor, view);
         title = this._calRangeTitle(days[0], days.length);
@@ -4718,6 +5321,7 @@
                     ${seg("three", "三")}
                     ${seg("day", "日")}
                     ${seg("table", "表格")}
+                    ${seg("habit", "习惯")}
                     ${seg("stats", "统计")}
                 </div>
                 <div class="north-caltab-types">
@@ -5105,6 +5709,21 @@
           }
           return;
         }
+        /* 习惯格子：跳到那一天的日视图（和统计柱子走同一条路，
+           都是「点一个日期 → 去那一天看看」） */
+        const habitCell =
+          e.target.closest && e.target.closest("[data-caltab-habitday]");
+        if (habitCell) {
+          const hm = String(habitCell.dataset.caltabHabitday || "").match(
+            /^(\d{4})-(\d{2})-(\d{2})$/
+          );
+          if (hm) {
+            this._calTabAnchor = new Date(+hm[1], +hm[2] - 1, +hm[3]);
+            this._calTabView = "day";
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
         /* 时长统计：局部周期切换（锚点回到今天）与翻页，独立于整页周期 */
         const durPeriodBtn = e.target.closest && e.target.closest("[data-caltab-durperiod]");
         if (durPeriodBtn) {
@@ -5142,6 +5761,12 @@
               this._paintCalendarTab(container);
               return;
             }
+            /* 习惯视图的「今天」：回到今年 */
+            if (this._calTabView === "habit") {
+              this._calTabHabitYear = new Date().getFullYear();
+              this._paintCalendarTab(container);
+              return;
+            }
             this._calTabAnchor = new Date();
             /* 月视图看的是 _calTabMonth，所以要一并清掉它 —— 一清就跟焦点日走，
                两种视图下「今天」都回到当月 / 当周 / 当日 */
@@ -5160,6 +5785,14 @@
              关窗时弹窗自己会重绘日历，类型 / 颜色的变动照常反映。 */
           if (act === "settings") {
             this._openSettingsModal();
+            return;
+          }
+          /* 习惯视图按年翻：它是一整年铺开的，锚点自己存（不碰日历焦点日，
+             也不碰统计的周期锚点） */
+          if (this._calTabView === "habit") {
+            const hy = this._calTabHabitYear || new Date().getFullYear();
+            this._calTabHabitYear = hy + (act === "next" ? 1 : -1);
+            this._paintCalendarTab(container);
             return;
           }
           /* 统计视图的翻页：挪统计周期的锚点（不碰日历焦点日） */
