@@ -28,9 +28,9 @@
   /* 日历标签页：addTab 注册用的类型名；openTab 时以 name + 该值作为 custom.id */
   const CAL_TAB_TYPE = "TimeTrailCalendar";
 
-  /* 日历标签页里已经接了视图的段位。五个都接上了 ——
+  /* 日历标签页里已经接了视图的段位。六个都接上了 ——
      以后再加段位，不在这里的点了只切高亮、不换内容。 */
-  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "stats"];
+  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "stats"];
 
   /* ---- 日历数据源 ----
      lifelog = 我们自己记的 LifeLog 记录（默认，读块属性）；
@@ -45,6 +45,20 @@
   /* 「创建的文档」一次最多取多少条：本年的全部文档，这个值只是兜底 ——
      一年写的文档数真超过它就把这个数字调大，别让它静默截断。 */
   const CAL_DOCS_LIMIT = 2000;
+
+  /* 表格视图的列定义：一处定义同时长出 colgroup 与表头 ——
+     加列 / 改列宽 / 改列名只动这里，表头文字与列宽永远对得上。
+     icon 必须是思源真实存在的图标 id（litheness 里核对过：
+     iconClock / iconTag / iconParagraph / iconHistory 都在，写错会渲染成空框）。
+     「时间」列 145px 是配着它那 53px 左缩进算的（见 `.north-caltab-table-row td.north-caltab-table-time`）：
+     53（缩进）+ 78（「03:57 - 04:57」这种 13 字符实测宽度）+ 10（右内边距）= 141，留几像素余量。
+     时间文字定长，按 13 字符算就够；缩进量要改，这一列跟着加减。 */
+  const CAL_TABLE_COLS = [
+    { key: "time", label: "时间", icon: "iconClock", width: "145px" },
+    { key: "type", label: "类型", icon: "iconTag", width: "92px" },
+    { key: "content", label: "内容", icon: "iconParagraph", width: "" },
+    { key: "dur", label: "时长", icon: "iconHistory", width: "76px", num: true },
+  ];
 
   /* ---- 时间轴视图（周 / 三日 / 日）尺寸 ----
      HOUR 是一小时的基准像素高度：小时高是「弹性」的 —— 记录密集的小时会被
@@ -566,6 +580,10 @@
       this._calTabTypeFilter = new Set();
       /* 类型筛选面板是否开着 —— 重绘后据此恢复，否则勾一个就被关掉 */
       this._calTabTypeMenuOpen = false;
+      /* 表格视图里被收起的那几天（存日期键）。只活在内存里：
+         切月 / 重绘都保留，重启插件回到全展开 —— 折叠是「当下想少看点」，
+         不是什么需要长期记住的偏好。 */
+      this._calTabTableCollapsed = new Set();
       /* 收起筛选面板用的文档级监听（卸载时要摘掉） */
       this._calTabTypesDocClick = null;
       /* 「创建的文档」这份数据的缓存；换数据源时整体作废 */
@@ -1025,6 +1043,54 @@
             this._persist("保存Dock显示");
             /* 即时切换侧栏 Dock 的显隐（走 DOM，不依赖 addDock 返回值） */
             this._applyDockVisibility();
+          },
+        })
+      );
+
+      /* —— 控制设置：时间轴视图的三个显示开关（都默认关闭） ——
+         只管周 / 三日 / 日这三个共用结构的视图；月视图条目与当天详情列表不动
+         （那边一行里塞不下类型、也没地方放图标）。
+         三个都走 _refreshCalendarTabs() 重绘：内容颜色靠容器类切换，
+         另外两个直接决定标布里有没有那段 HTML，重绘一次即生效。 */
+      controlCard.appendChild(
+        this._buildRow({
+          title: "内容颜色",
+          desc: "时间轴视图里记录的文字按类型色着色；关闭时用主题的正文色与三级文字色。默认关闭。",
+          controlType: "toggle",
+          value: !!this.data.calTextColor,
+          onChange: (v) => {
+            this.data.calTextColor = v;
+            this._persist("保存内容颜色");
+            this._refreshCalendarTabs();
+          },
+        })
+      );
+
+      controlCard.appendChild(
+        this._buildRow({
+          title: "展示类型",
+          desc:
+            "时间轴视图（周 / 三日 / 日）的标题写成「类型 | 内容」；关闭时只显示内容。默认关闭。",
+          controlType: "toggle",
+          value: !!this.data.calShowType,
+          onChange: (v) => {
+            this.data.calShowType = v;
+            this._persist("保存展示类型");
+            this._refreshCalendarTabs();
+          },
+        })
+      );
+
+      controlCard.appendChild(
+        this._buildRow({
+          title: "时间图标",
+          desc: "时间前面显示一枚表针图标（思源内置）。默认关闭。",
+          controlType: "toggle",
+          value: !!this.data.calShowIcon,
+          onChange: (v) => {
+            this.data.calShowIcon = v;
+            this._persist("保存时间图标");
+            this._refreshCalendarTabs();
           },
         })
       );
@@ -2598,7 +2664,13 @@
         const aTime = this._attr("time");
         const aType = this._attr("type");
         const aContent = this._attr("content");
-        const sql = `SELECT b.id, b.content,
+        /* rb 是记录所在的那篇**文档**（记录都住在当天的日记文档里）。
+           只多读 content 与 ial 两列：content 当文档标题、ial 里抠文档图标，
+           表格视图的「日期带」要用图标颜色上色（icon 取色走 _iconColorOf）。
+           LEFT JOIN 是必须的 —— 万一某条记录的 root_id 不指向文档也不会漏掉记录。 */
+        const sql = `SELECT b.id, b.content, b.root_id,
+                            rb.content AS tt_doc,
+                            rb.ial AS tt_ial,
                             a1.value AS tt_date,
                             a2.value AS tt_time,
                             a3.value AS tt_type,
@@ -2608,20 +2680,38 @@
                      INNER JOIN attributes a2 ON b.id = a2.block_id AND a2.name = '${aTime}'
                      INNER JOIN attributes a3 ON b.id = a3.block_id AND a3.name = '${aType}'
                      INNER JOIN attributes a4 ON b.id = a4.block_id AND a4.name = '${aContent}'
+                     LEFT JOIN blocks rb ON rb.id = b.root_id
                      WHERE b.type = 'p'
                      ORDER BY a1.value DESC, a2.value DESC, b.id
                      LIMIT 200`;
         const resp = await this._request("/api/query/sql", { stmt: sql });
         if (resp.code !== 0 || !Array.isArray(resp.data)) return records;
         for (const row of resp.data) {
+          /* 文档图标在 ial 里：icon="1f4d5"（内置 emoji 码位）或 icon="material/xx.svg" */
+          const im = String(row.tt_ial || "").match(/icon="([^"]+)"/);
           records.push({
             id: `lifelog_dock_${row.id}`,
             content: (row.tt_content || row.content || "").trim(),
             date: (row.tt_date || "").trim().replace(/\//g, "-"),
             time: (row.tt_time || "").trim(),
             type: (row.tt_type || "").trim(),
+            /* 刻意不叫 icon / color：那两个字段表示「记录自己的」图标与颜色，
+               _iconHint() 与 _calRecordColor() 都会读它们；这里装的是「记录所在文档的」，
+               混用会让每条记录的悬停气泡都多出一个文档表情、还会把记录的类型色顶掉。
+               表格视图的日期带只认 docColor，其它视图不受影响。 */
+            docIcon: im ? im[1] : "",
+            docTitle: String(row.tt_doc || "").trim(),
+            docColor: "",
           });
         }
+        /* 文档图标颜色要读像素，异步。同一批里重复的图标只算一次（_iconColorOf 内部还有缓存） */
+        const icons = Array.from(
+          new Set(records.map((r) => r.docIcon).filter(Boolean))
+        );
+        await Promise.all(icons.map((ic) => this._iconColorOf(ic)));
+        records.forEach((r) => {
+          r.docColor = r.docIcon ? this._calIconColors.get(r.docIcon) || "" : "";
+        });
       } catch (e) {
         console.warn(`${NAME}：Dock 查询失败`, e);
       }
@@ -2790,6 +2880,21 @@
     /* 记录的量词。数据源换成「创建的文档」之后，再说「条记录」就不对了 */
     _calUnit() {
       return this._calSource() === "docs" ? "篇文档" : "条记录";
+    }
+
+    /* 时间轴视图的三个显示开关，一律默认关闭（不勾选 = 保持素色原样）：
+       - calTextColor：记录文字按类型色着色（关 = 标题用正文色、时间用三级文字色）
+       - calShowType：标题写成「类型 | 内容」（关 = 只显示内容）
+       - calShowIcon：时间前面挂一枚表针图标
+       三个都只作用于周 / 三日 / 日这三个共用结构的视图，月视图与当天详情列表不受影响。 */
+    _calTextColor() {
+      return !!(this.data && this.data.calTextColor);
+    }
+    _calShowType() {
+      return !!(this.data && this.data.calShowType);
+    }
+    _calShowIcon() {
+      return !!(this.data && this.data.calShowIcon);
     }
 
     /* 日历当前数据源的那份数组。
@@ -3694,18 +3799,226 @@
         const style = `top:${top.toFixed(1)}px;height:${height.toFixed(1)}px${
           c ? `;--tt-c:${c}` : ""
         }`;
-        const timeSpan = `<span class="north-caltab-wv-event-time">${escapeHtml(
+        /* 时间前面挂一枚思源内置的表针图标（iconClock），受「时间图标」开关控制。
+           直接用 #iconClock 符号 —— 它与插件里其它图标同一套来源，
+           symbol 自带 stroke="currentColor"，所以颜色自动跟这一行的文字色走，
+           深浅（含内容颜色开关带来的透明度）都不用在这里管。
+           尺寸与偏移写在 index.css 的 .north-caltab-wv-event-time-icon 里。 */
+        const clockIcon = this._calShowIcon()
+          ? `<svg class="north-caltab-wv-event-time-icon" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><use xlink:href="#iconClock"></use></svg>`
+          : "";
+        const timeSpan = `<span class="north-caltab-wv-event-time">${clockIcon}${escapeHtml(
           label
         )}</span>`;
-        const titleSpan = `<span class="north-caltab-wv-event-title">${escapeHtml(
-          r.content || ""
-        )}</span>`;
+        /* 标题写成「类型 | 内容」（对齐参考图里的日程块），受「展示类型」开关控制。
+           只有时间轴视图（周 / 三日 / 日）这样，月视图条目与当天详情的列表仍只显示内容 ——
+           那两处一行里塞不下类型，硬加会把内容挤没。
+           没有类型的记录不补分隔符，免得出现孤零零一个「| 内容」。 */
+        const titleSpan = `<span class="north-caltab-wv-event-title">${
+          this._calShowType() && r.type ? `${escapeHtml(r.type)} | ` : ""
+        }${escapeHtml(r.content || "")}</span>`;
         return `<div class="north-caltab-wv-event${
           compact ? " is-compact" : ""
         }" style="${style}" data-cal-id="${escapeHtml(r.id || "")}" data-tip="${escapeHtml(
           tip
         )}">${compact ? timeSpan + titleSpan : titleSpan + timeSpan}</div>`;
       });
+    }
+
+    /* ============================================================
+     * 表格视图（第六个段位）
+     * 当月记录按日分组排成一张表：日期分组头 + 一行一条，表头与分组头都吸顶。
+     * 数据与其它视图共用同一份（数据源 + 类型筛选 + 月份锚点），
+     * 所以不会出现「切个视图就换了口径」。
+     * 列只放四样：时间 / 类型 / 内容 / 时长 —— 恰好是其它视图都在表达的四件事，
+     * 这里只是把它们排成能直接竖着扫的一列列，不额外发明新信息。
+     * ============================================================ */
+
+    /* 一天的记录 → 带「起止 + 时长」的行数据。
+       时长规则与时间轴 / 统计完全一致：显式区间优先，否则接到下一条开始，
+       当天最后一条补 WEEK_DEFAULT_MIN；时间解析不出的行不编时长（表格里显示 —）。 */
+    _calDayRows(records) {
+      const rows = (records || []).map((r) => ({
+        record: r,
+        range: this._parseTimeRange(r && r.time),
+      }));
+      const timed = rows
+        .filter((x) => x.range)
+        .sort((a, b) => a.range.start - b.range.start);
+      timed.forEach((x, i) => {
+        const next = timed[i + 1];
+        let end =
+          x.range.end !== null
+            ? x.range.end
+            : next
+            ? next.range.start
+            : x.range.start + WEEK_DEFAULT_MIN;
+        if (end <= x.range.start) end = x.range.start + 1;
+        x.start = x.range.start;
+        x.end = end;
+        x.dur = end - x.range.start;
+      });
+      /* 有时间的按时间先后靠前，没时间的沉到最后（顺序稳定，不再打乱） */
+      return rows.sort((a, b) => {
+        const sa = a.range ? a.range.start : Infinity;
+        const sb = b.range ? b.range.start : Infinity;
+        return sa - sb;
+      });
+    }
+
+    /* 表格视图的 HTML。返回 { count, html } —— 条数交给工具栏标题用。
+       日期倒序（离今天近的排上面，对齐参考图），同一天内按时间正序。 */
+    _buildCalendarTableHtml(byDate, monthAnchor) {
+      const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+      const y = monthAnchor.getFullYear();
+      const m = monthAnchor.getMonth();
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const dates = [];
+      for (let d = 1; d <= daysInMonth; d++) {
+        const key = this._calKey(new Date(y, m, d));
+        if (byDate[key] && byDate[key].length) dates.push(key);
+      }
+      dates.reverse();
+
+      const unit = this._calUnit();
+      const count = dates.reduce((n, k) => n + byDate[k].length, 0);
+      if (!count) {
+        /* 空态文案与「当天弹窗」同一套措辞：量词换成文档时切掉首字（篇文档→文档） */
+        return {
+          count: 0,
+          html: `<div class="north-caltab-table"><div class="north-caltab-table-empty">这一个月还没有${escapeHtml(
+            unit.slice(1)
+          )}</div></div>`,
+        };
+      }
+
+      const collapsed = this._calTabTableCollapsed;
+      const body = dates
+        .map((key) => {
+          const rows = this._calDayRows(byDate[key]);
+          const day = new Date(`${key}T00:00:00`);
+          const dayMin = rows.reduce((n, x) => n + (x.dur || 0), 0);
+          const isToday = key === this._calKey(new Date());
+          const isCollapsed = collapsed && collapsed.has(key);
+          /* 分组头 = 折叠箭头 + 日期图标 + 日期星期（左）＋ 条数 / 当天合计时长（右）。
+             整条带子**只干一件事：展开 / 收起**（用户明确要求，不要跳转）——
+             所以带子本身就是折叠开关，不挂 data-cal-id。
+             日期图标取「这一天对应文档」的图标颜色（docColor，见 _queryLifeLogDockRecords
+             与 _queryCalendarDocs）；取不到就退回主色，不会变成无色。
+             td 必须留在 table-cell 上（吸顶要靠它），左右分栏交给里面这层 flex。 */
+          const first = rows.find((x) => x.record);
+          const rec = first ? first.record : null;
+          /* 这一天对应的文档：图标与颜色都取文档自己的。
+             文档源记录的 icon/color 本来就是「这篇文档的」，直接可用；
+             记录源是 join 出来的 docIcon/docColor。两种数据源共用一个取值口。 */
+          const docColor = rec
+            ? rec.docColor || (rec.icon ? rec.color || "" : "")
+            : "";
+          const docIcon = rec ? rec.docIcon || rec.icon || "" : "";
+          const docTitle = rec && rec.docTitle ? rec.docTitle : "";
+          /* 图标两态：emoji 码位（`1f4d5`）直接渲染成那个 emoji —— 那才是文档自己的图标；
+             图片路径（material/xx.svg）没法稳定取到 URL，退回日历字形、只借用它的颜色。
+             都没有就还是日历字形 + 主色，不会变成空白。 */
+          const isEmoji = /^[0-9a-f]{1,8}$/i.test(docIcon);
+          let iconHtml = "";
+          if (isEmoji) {
+            try {
+              iconHtml = `<span class="north-caltab-table-gicon north-caltab-table-gemoji">${escapeHtml(
+                String.fromCodePoint(parseInt(docIcon, 16))
+              )}</span>`;
+            } catch (e) {
+              iconHtml = "";
+            }
+          }
+          if (!iconHtml) {
+            iconHtml = `<svg class="north-caltab-table-gicon"${
+              docColor ? ` style="color:${escapeHtml(docColor)}"` : ""
+            } viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconCalendar"></use></svg>`;
+          }
+          const tip = `${key} ${WD[day.getDay()]} · ${rows.length} ${unit}${
+            dayMin ? ` · 共 ${this._fmtStatsDur(dayMin)}` : ""
+          }${docTitle && docTitle !== key ? ` · ${docTitle}` : ""}`;
+          const chevron = isCollapsed
+            ? `<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconRight"></use></svg>`
+            : `<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconDown"></use></svg>`;
+          const head = `<tr class="north-caltab-table-group${
+            isToday ? " is-today" : ""
+          }${isCollapsed ? " is-collapsed" : ""}" data-tip="${escapeHtml(tip)}"><td colspan="4"${
+            docColor ? ` style="--tt-doc-c:${escapeHtml(docColor)}"` : ""
+          }>
+                        <div class="north-caltab-table-gwrap" data-caltab-table-toggle="${escapeHtml(
+                          key
+                        )}">
+                            <span class="north-caltab-table-gleft">
+                                <span class="north-caltab-table-gchev">${chevron}</span>
+                                ${iconHtml}
+                                <span class="north-caltab-table-gdate">${escapeHtml(key)} ${
+            WD[day.getDay()]
+          }</span>
+                            </span>
+                            <span class="north-caltab-table-gmeta">${rows.length} ${escapeHtml(
+            unit
+          )}${dayMin ? ` · 共 ${this._fmtStatsDur(dayMin)}` : ""}</span>
+                        </div>
+                    </td></tr>`;
+          const trs = rows
+            .map((x) => {
+              const r = x.record;
+              /* 类型色点复用取色入口；悬停气泡的文案与时间轴事件块一字不差 */
+              const c = this._calRecordColor(r);
+              const hint = this._iconHint(r);
+              const tip = `${r.time || ""} ${r.type || ""}：${this._brToSpace(
+                r.content
+              )}${hint ? ` (${hint})` : ""}`.trim();
+              const typeName = (r.type || "").trim();
+              /* 时间列：能算出区间就给区间（与时间轴同一口径），否则原样显示记录里的时间 */
+              const timeText = x.range
+                ? `${this._fmtMin(x.start)} - ${this._fmtMin(x.end)}`
+                : ((r.time || "").trim() || "—");
+              return `<tr class="north-caltab-table-row"${
+                r.id ? ` data-cal-id="${escapeHtml(r.id)}"` : ""
+              } data-tip="${escapeHtml(tip)}">
+                        <td class="north-caltab-table-time">${escapeHtml(timeText)}</td>
+                        <td class="north-caltab-table-type">${
+                          typeName
+                            ? `<span class="north-caltab-table-typepill" style="--tt-c:${
+                                c || DEFAULT_TYPE_COLOR
+                              }">${escapeHtml(typeName)}</span>`
+                            : `<span class="north-caltab-table-none">—</span>`
+                        }</td>
+                        <td class="north-caltab-table-content">${escapeHtml(
+                          this._brToSpace(r.content || "")
+                        )}</td>
+                        <td class="north-caltab-table-dur">${
+                          x.dur ? this._fmtStatsDur(x.dur) : "—"
+                        }</td>
+                    </tr>`;
+            })
+            .join("");
+          /* 收起的那一天只留分组头 —— 表头 / 分组头的吸顶不受影响（它们还在） */
+          return head + (isCollapsed ? "" : trs);
+        })
+        .join("");
+
+      return {
+        count,
+        html: `<div class="north-caltab-table">
+                    <table class="north-caltab-table-tbl">
+                        <colgroup>${CAL_TABLE_COLS.map((c) =>
+                          c.width ? `<col style="width:${c.width}">` : "<col>"
+                        ).join("")}</colgroup>
+                        <thead><tr>${CAL_TABLE_COLS.map(
+                          (c) =>
+                            `<th${
+                              c.num ? ' class="north-caltab-table-dur"' : ""
+                            }><svg class="north-caltab-table-thicon" viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#${
+                              c.icon
+                            }"></use></svg>${c.label}</th>`
+                        ).join("")}</tr></thead>
+                        <tbody>${body}</tbody>
+                    </table>
+                </div>`,
+      };
     }
 
     /* 时间轴视图结构（周 / 三日共用一段代码）：表头（星期 + 日期，今天沿用月视图
@@ -4258,6 +4571,9 @@
     async _renderCalendarTab(container) {
       if (!container) return;
       container.classList.add("fn__flex-1", "north-timetrail-caltab");
+      /* 「内容颜色」开关落在容器类上：有这一类才走类型色配色，没有就是正文色原样。
+         用 toggle（不是 add）是为了关掉开关后能还原 —— 这里每次重绘都会跑一遍。 */
+      container.classList.toggle("north-caltab--type-color", this._calTextColor());
       /* 复用 Dock 那套自绘气泡：条目上带 data-tip，悬停显示完整记录行。
          气泡是全局单例，两个容器分别绑定、互不干扰（容器上各自有守卫）。 */
       this._bindDockTooltip(container);
@@ -4293,8 +4609,10 @@
       const todayKey = this._calKey(new Date());
       const byDate = this._calTabRecordsByDate();
       const view = this._calTabView;
-      /* 时间轴视图 = 周 / 三日，两者共用同一套结构与尺寸，只有列数不同 */
+      /* 时间轴视图 = 周 / 三日 / 日，三者共用同一套结构与尺寸，只有列数不同 */
       const isTimeline = view === "week" || view === "three" || view === "day";
+      /* 表格视图：当月记录按日分组排成一张表（列＝时间/类型/内容/时长） */
+      const isTable = view === "table";
       const isStats = view === "stats";
       /* 统计视图的周期状态：首次进入给默认值（按年，标题即「N 年」），
          与 Dock 统计互不干扰 */
@@ -4315,7 +4633,8 @@
          所以月视图滚动不会把周 / 三日 / 日的定位带偏（反过来也一样）。 */
       const monthAnchor = this._calMonthAnchor();
 
-      /* 标题：月视图给年月，时间轴视图给这一段的起止日期，统计视图给周期起止 */
+      /* 标题：月视图给年月，时间轴视图给这一段的起止日期，统计视图给周期起止，
+         表格视图给「年月 · N 条记录」（当月一共多少条，扫一眼就有数） */
       let title = `${monthAnchor.getFullYear()}年${monthAnchor.getMonth() + 1}月`;
       if (isStats) {
         title = this._computeLifeLogDockPeriod(
@@ -4323,12 +4642,23 @@
           this._calTabStatsAnchor
         ).label;
       }
+      /* 表格的身体先算：标题里的条数就是它数出来的，算两次容易两边不一致 */
+      const table = isTable
+        ? this._buildCalendarTableHtml(byDate, monthAnchor)
+        : null;
+      if (isTable) {
+        title = `${monthAnchor.getFullYear()}年${
+          monthAnchor.getMonth() + 1
+        }月 · ${table.count} ${this._calUnit()}`;
+      }
 
       /* 月视图才需要算三个月的格子（126 格，每格都要算农历 / 节气），
          时间轴视图下这活儿纯属白干，所以放进分支里 */
       let body = "";
       if (isStats) {
         body = this._buildCalendarStatsHtml();
+      } else if (isTable) {
+        body = table.html;
       } else if (isTimeline) {
         const days = this._calTimelineDays(anchor, view);
         title = this._calRangeTitle(days[0], days.length);
@@ -4387,6 +4717,7 @@
                     ${seg("week", "周")}
                     ${seg("three", "三")}
                     ${seg("day", "日")}
+                    ${seg("table", "表格")}
                     ${seg("stats", "统计")}
                 </div>
                 <div class="north-caltab-types">
@@ -4845,6 +5176,19 @@
             this._paintCalendarTab(container);
             return;
           }
+          /* 表格视图按月翻：它看的是「月视图停在的月份」（两者共用同一个锚点），
+             所以月视图 → 表格切过去是连续的，翻页体感也和月视图一致。
+             不能走下面那条「时间轴按天翻」的通用分支 —— 表格是按月成篇的。 */
+          if (this._calTabView === "table") {
+            const base = this._calMonthAnchor();
+            this._calTabMonth = new Date(
+              base.getFullYear(),
+              base.getMonth() + (act === "next" ? 1 : -1),
+              1
+            );
+            this._paintCalendarTab(container);
+            return;
+          }
           /* 时间轴视图是一次成型的静态网格，没有滑动窗口可滚，直接挪锚点再重绘。
              步长分两种：周视图翻整周（= 窗口宽度 7，相邻周首尾相接）；三日 / 日视图
              按「天」翻一格 —— 三日视图早先是整窗翻 3 天，一按就跳过去三天，落点太跳，
@@ -4880,6 +5224,24 @@
               base.getMonth() + (act === "next" ? 1 : -1),
               1
             );
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        /* 表格视图的日期带：整条带子（含左边小箭头）只干一件事 —— 展开 / 收起这一天。
+           它不挂 data-cal-id，所以不会走到下面的跳转分支；键盘回车也走这里。 */
+        const tableToggle = e.target.closest && e.target.closest("[data-caltab-table-toggle]");
+        if (tableToggle) {
+          const key = tableToggle.dataset.caltabTableToggle;
+          if (key) {
+            if (!(this._calTabTableCollapsed instanceof Set)) {
+              this._calTabTableCollapsed = new Set();
+            }
+            if (this._calTabTableCollapsed.has(key)) {
+              this._calTabTableCollapsed.delete(key);
+            } else {
+              this._calTabTableCollapsed.add(key);
+            }
             this._paintCalendarTab(container);
           }
           return;

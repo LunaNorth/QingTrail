@@ -1980,6 +1980,16 @@
      改这一处等于把线的浓度收归插件自己管，换任何主题观感都一致。
      想整体调深浅只改这个百分比（表头分隔线、格子边线、小时线共用）。 */
   --tt-cal-line: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  /* 条目 / 事件块「标题」的墨色（设置里打开「内容颜色」后才用得上，见下方
+     .north-caltab--type-color 那一组）：正文黑（on-background）压在淡色块底上太扎眼，
+     三级文字色（on-surface-light）又太轻、撑不起标题，所以取两者中间偏正文的一档。
+     有了这一档，标题「重」、时间「淡」在任何主题下都成立 ——
+     各主题对 on-background / on-surface 的定义差别极大（Neo 的 on-surface 是紫灰、
+     默认主题是中性灰），直接写死某一支都会在别的主题上跑偏。
+     58% 是量出来的：往 on-surface 走标题就不够重（对比度掉到 5 以下），
+     往 on-background 走就回到「正文黑」（对比度 12 以上），58% 落在 5.5~7 之间。
+     要整体调标题轻重只改这一个数（写大 = 更靠近 on-surface = 更轻）。 */
+  --tt-ink-title: color-mix(in srgb, var(--b3-theme-on-surface) 58%, var(--b3-theme-on-background));
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -2336,7 +2346,9 @@
 
 /* 当天记录条目：只显示内容，整块铺类型色（参考图里的日程块样式）。
    色值来自 --tt-c（index.js 按记录类型写入）。浅底 + 深字在任何主题下都可读，
-   所以不必再写暗色主题分支。 */
+   所以不必再写暗色主题分支。
+   文字默认走正文色；设置里打开「内容颜色」后（容器带 .north-caltab--type-color）
+   才换成类型色配色，见下方那一组规则。 */
 .north-caltab-items {
   display: flex;
   flex-direction: column;
@@ -2529,7 +2541,9 @@
 
 /* 事件块：沿用月视图条目那套观感 —— 左侧一条短色条 + 同色极淡底，
    色值来自 --tt-c（index.js 按记录类型写入）。top / height 由 JS 算好内联，
-   因为高度还要反过来决定「时间那行放不放得下」。 */
+   因为高度还要反过来决定「时间那行放不放得下」。
+   文字默认正文色；打开「内容颜色」后标题变类型色墨色、时间变淡，
+   见 .north-caltab--type-color 那一组。 */
 .north-caltab-wv-event {
   position: absolute;
   left: 2px;
@@ -2564,12 +2578,56 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 时间行：同样的类型色只留一点（22%），基准是三级文字色，
+   再整行压到 70% 不透明 —— 关键在最后这条：不少主题把 on-surface-light
+   定义得偏实（实测有效色接近 #65686F），只换基准色压不住，
+   必须再加一点透明度，才能保证「任何主题下都比标题淡一档」。 */
 .north-caltab-wv-event-time {
   display: block;
   font-size: 11px;
   color: var(--b3-theme-on-surface-light);
   white-space: nowrap;
   overflow: hidden;
+}
+/* 时间前那枚小表针（思源内置 iconClock，由 index.js 内联 <use>，
+   只在设置里打开「时间图标」时才会出现在 DOM 里）：
+   尺寸跟字号一样高；-0.14em 是把它压到文字视觉中线上的偏移量 ——
+   不加它图标会浮在字面上方约 1.5px（24 格 viewBox 里 r=10 的圆 + 11px 字号），
+   写成 em 是为了以后改字号时偏移跟着走。
+   display: inline-block 是防主题把 svg 设成 block —— 那样时间会被挤到第二行。
+   想调图标大小 / 间距 / 高低，三个值都在这条规则里。 */
+.north-caltab-wv-event-time-icon {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 3px;
+  vertical-align: -0.14em;
+}
+
+/* ===== 「内容颜色」开关（设置 → 控制设置）=====
+   容器上带 .north-caltab--type-color 时才生效（由 index.js 的
+   _renderCalendarTab 按开关 toggle）。默认不开启，所以上面两条基规则
+   仍是「标题 = 正文色、时间 = 三级文字色」的原样。
+   开启后：标题 = 类型色 + 墨色（与块底色同色相、但不到正文黑），
+   时间 = 类型色 + 三级文字色，并整行压到 70% 不透明。
+   为什么时间要额外加透明度：不少主题把 on-surface-light 定义成**不透明**的中深灰
+   （实测有效色 ≈ #65686F，和标题一样重），只换基准色压不住。
+   想调深浅：标题改下面的 25% 或 --tt-ink-title 的 58%，时间改 22% 与 0.7。 */
+.north-caltab--type-color .north-caltab-item,
+.north-caltab--type-color .north-caltab-wv-event {
+  color: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 25%,
+    var(--tt-ink-title, var(--b3-theme-on-surface))
+  );
+}
+.north-caltab--type-color .north-caltab-wv-event-time {
+  color: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 22%,
+    var(--b3-theme-on-surface-light)
+  );
+  opacity: 0.7;
 }
 
 /* 矮块（当天末条基本都是）：两行放不下，改成时间 + 标题挤在同一行。
@@ -2593,6 +2651,285 @@
   flex: 1 1 auto;
   min-width: 0;
   display: block;
+}
+
+/* ===== 表格视图（第六段位）：当月记录按日分组排成一张表 =====
+   列固定为 时间 / 类型 / 内容 / 时长 —— 其它视图都在表达的这四件事，
+   这里排成能竖着扫的一列列。表头吸顶，日期分组头吸在表头正下方。
+   列宽交给 colgroup + table-layout:fixed：永远不会横向溢出，
+   窄栏下「内容」列自己收窄走省略号，另外三列宽度稳定不跳。
+   吸顶元素的背景必须是不透明底色，否则下面的行会从表头底下透出来。
+   颜色只借主题变量与 --tt-cal-line（前景色 7%），深浅主题不用各写一份。 */
+.north-caltab-table {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.north-caltab-table::-webkit-scrollbar {
+  display: none;
+}
+.north-caltab-table-tbl {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+/* 表头吸顶（top: 0）；高度 32px 与下面分组头的 top 是一对，改一个必须改另一个，
+   否则中间会漏出一条正在滚动的行。
+   观感：铺一层比正文略深的浅灰底，读起来才是「表头」而不是一行灰字；
+   列名用小字号 + 中等字重 + 一点字距，前面各带一枚同色小图标 ——
+   与插件里其它标题（分组标题 / 区块头）同一套克制风格。 */
+/* 表头吸顶（top: 0）；高度 32px 与下面分组头的 top 是一对，改一个必须改另一个，
+   否则中间会漏出一条正在滚动的行。
+   观感：一条与日期色带同宽、同圆角半径的浅灰带；列名用小字号 + 中等字重 + 一点字距，
+   前面各带一枚同色小图标 —— 与插件里其它标题（分组标题 / 区块头）同一套克制风格。
+   **表头自己不动**：图标与列名都保持原来的 10 / 28 两条位置
+   （试过把表头也一起右移到 34 / 53 去跟数据对齐，用户不要 —— 只让列表缩进，表头照旧）。
+   （历史：试过「内缩 6px 再倒圆角」，用户说要通栏、回退了；之后要求四个角跟色带一致，
+   现在是「通栏 + 只倒四个外角」。） */
+.north-caltab-table-tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 32px;
+  padding: 0 10px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0.3px;
+  color: var(--b3-theme-on-surface-light);
+  /* 自己只铺一层「不透明的页面色」：吸顶时要挡住滚过去的行，圆角缺口那里
+     露出来的也得是页面色（不能是底下的行 / 色带）。看得见的浅灰带交给下面的 ::before。 */
+  background: var(--b3-theme-background);
+  white-space: nowrap;
+}
+/* 表头那条看得见的浅灰带（含下沿的 1px 细线）—— 单独拿一层画，才能倒圆角：
+   直接把圆角写在 th 上会连它那层不透明底一起剪掉，圆角缺口就会把正在滚过去的
+   行 / 日期色带漏出来（吸顶元素最忌讳这个）。
+   做法：绝对定位 + z-index:-1 —— th 自己是 sticky、本身就是层叠上下文，
+   于是这一层垫在「th 的底色 / 边框」之上、「列名文字」之下，文字不受影响。
+   inset:0 落在 th 的 padding box 上，所以列之间的竖分隔线（th 的 border-right）
+   画在 padding box 外面、不会被这层盖掉。
+   圆角只倒整条带子的四个外角（首列左两角、末列右两角）：中间的列也倒的话，
+   列与列之间会看出一排小缺口。半径 6px 与日期色带一致。 */
+.north-caltab-table-tbl thead th::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4.5%, var(--b3-theme-background));
+  border-bottom: 1px solid var(--tt-cal-line);
+}
+.north-caltab-table-tbl thead th:first-child::before {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+.north-caltab-table-tbl thead th:last-child::before {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+.north-caltab-table-thicon {
+  display: inline-block;
+  vertical-align: -2.5px;
+  margin-right: 5px;
+  opacity: 0.8;
+}
+/* 竖分隔线：表头与数据行共用一套，最后一列不画（整张表右侧不封口，
+   与日历网格同一个处理）。分组头是 colspan 的整行，不受这条影响。 */
+.north-caltab-table-tbl thead th,
+.north-caltab-table-row td {
+  border-right: 1px solid var(--tt-cal-line);
+}
+.north-caltab-table-tbl thead th:last-child,
+.north-caltab-table-row td:last-child {
+  border-right: none;
+}
+/* 日期分组头：吸在表头下面（top = 表头高）。
+   这里分两层，各管一件事：
+   - td 只负责「吸顶 + 不透明底」——吸上去时必须挡住下面的行，所以底色是纯页面色；
+   - 里面的 .gwrap 才是那条看得见的**圆角色带**。
+   **左右不内缩**：色带与表头同宽。表头是一条通栏浅灰带，色带以前两侧各留 6px，
+   看上去就是「表头比列表长出一截」，所以那 6px 去掉了（td padding 0）。
+   gwrap 自己的左右内边距 10px 与表头 th 的 padding 对上：
+   折叠箭头的方块与表头图标同一起点，右侧「N 条记录」与表头「时长」同一右端。
+   **上下不留边距**：收起时相邻色带紧贴成一条紧凑的列表、展开时色带紧贴它下面第一行，
+   中间不会出现一格白缝（这一点是照着参考图调的，别随手加 padding）。
+   --tt-doc-c 是 JS 内联写上的文档图标采样色，取不到时用主色兜底。 */
+.north-caltab-table-group td {
+  position: sticky;
+  top: 32px;
+  z-index: 1;
+  padding: 0;
+  background: var(--b3-theme-background);
+}
+.north-caltab-table-gwrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--tt-doc-c, var(--b3-theme-primary)) 12%,
+    var(--b3-theme-background)
+  );
+  transition: background 0.12s ease;
+}
+/* 悬停：同色加深一档（不是叠一层灰），和块 / 条目的悬停逻辑一致 */
+.north-caltab-table-gwrap:hover {
+  background: color-mix(
+    in srgb,
+    var(--tt-doc-c, var(--b3-theme-primary)) 22%,
+    var(--b3-theme-background)
+  );
+}
+.north-caltab-table-gleft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* 折叠箭头：小方块按钮，与插件其它图标按钮同一套观感（不改圆形） */
+.north-caltab-table-gchev {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.north-caltab-table-gchev:hover {
+  background: color-mix(in srgb, var(--b3-theme-primary) 18%, transparent);
+  color: var(--b3-theme-primary);
+}
+.north-caltab-table-gicon {
+  flex: 0 0 auto;
+  color: var(--b3-theme-primary);
+}
+/* 文档图标是 emoji 时直接渲染那个 emoji（那才是「文档自己的图标」，颜色由字形自带的颜色决定）；
+   图片类图标（material/xx.svg）没法稳定取到 URL，退回日历字形、只借用它的颜色。 */
+.north-caltab-table-gemoji {
+  font-size: 12.5px;
+  line-height: 1;
+  width: auto;
+  height: auto;
+}
+.north-caltab-table-gdate {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 今天那一组：日期用主色点一下，和月视图的今天徽标同一个意思 */
+.north-caltab-table-group.is-today .north-caltab-table-gdate {
+  color: var(--b3-theme-primary);
+}
+/* 收起的那天：条数文字淡一点，暗示里面的行被藏起来了 */
+.north-caltab-table-group.is-collapsed .north-caltab-table-gmeta {
+  opacity: 0.7;
+}
+.north-caltab-table-gmeta {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+/* 数据行 */
+/* 行内容的左边距 10px = 表头 th 的 padding —— 也就是「数据从自己那一列的**图标**下面开始」，
+   类型 / 内容两列的图标与数据在同一条竖线上（用户要的就是这个：别跟列名文字去对齐）。
+   时间列是唯一的例外，它再往里缩，跟日期带里的日期文字对齐（见下）。 */
+.north-caltab-table-row td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--tt-cal-line);
+  vertical-align: middle;
+}
+/* 时间列单独缩到 53px —— 那正是日期带里日期文字（「2026-09-12」）的起点，
+   于是「组标题的日期文字」与「组内每一行的时间」左对齐，层级一眼看得出来
+   （用户明确要的就是这一条线，别再动了）。53 - 10 = 43px 是这一列比别的列多出来的量，
+   所以时间列宽度要跟着放宽（见 CAL_TABLE_COLS 的 145px），否则「03:57 - 04:57」会顶到类型列。
+   表头那几个列名不动，仍停在 28 —— 用户要的就是「只缩进列表，表头照旧」。 */
+.north-caltab-table-row td.north-caltab-table-time {
+  padding-left: 53px;
+}
+/* 鼠标悬停：整行铺一层浅灰底，并把整行的**四个外角倒圆角**（半径 6px，与日期色带一致）——
+   首列倒左两角、末列倒右两角；中间两列彼此相邻，不需要（也不该）倒。
+   圆角只加在 :hover 上：不悬停时行还是方方正正的表格样子，一悬停才「浮」起一条圆角底。
+   背景铺在 td 上而不是行上，是因为 td 才吃 border-radius。
+   （分隔线仍是 td 的 border-bottom，悬停时它会在圆角外面露出很短一截 ——
+   线只有前景色 7%，不悬停时也是这么画的，所以看不出来；真嫌碍眼再把它挪进背景层。） */
+.north-caltab-table-row:hover td {
+  background: var(--b3-list-hover);
+}
+.north-caltab-table-row:hover td:first-child {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+.north-caltab-table-row:hover td:last-child {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+/* 时间列：等宽数字，翻页 / 上下扫的时候数字位对齐，眼睛不用来回找 */
+.north-caltab-table-time {
+  color: var(--b3-theme-on-surface);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 类型列：做成彩色胶囊（底色 14% 类型色 + 同色偏深的字），
+   与时间轴事件块那套配色同源，但这里始终着色 —— 类型是这一列的标签，
+   不是「记录正文」，不受「内容颜色」开关管。 */
+.north-caltab-table-type {
+  overflow: hidden;
+}
+.north-caltab-table-typepill {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--tt-c, #888888) 14%, transparent);
+  color: color-mix(in srgb, var(--tt-c, #888888) 55%, var(--b3-theme-on-background));
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+/* 内容列：主信息，给正文色；窄了就走省略号（完整内容还有悬停气泡兜着） */
+.north-caltab-table-content {
+  color: var(--b3-theme-on-background);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 时长列：和上面三列同一套对齐 —— 表头的「图标 + 时长」与下面的数字都从列的左端 10 起，
+   数字落在自己那一列的图标下面（用户要求「几列都与表头这列的图标左对齐」）。
+   这列窄（76px），左对齐时数字也不会顶出去：最长的「10时12分」约 49px，还有 17px 余量。
+   （表头那格也带这个类，所以一条规则同时管住表头与数据 —— 不再需要单独写 th.类名去覆盖。） */
+.north-caltab-table-dur {
+  text-align: left;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.north-caltab-table-none {
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-table-empty {
+  text-align: center;
+  color: var(--b3-theme-on-surface-light);
+  padding: 32px 0;
+  font-size: 13px;
 }
 
 /* ===== 统计视图（第五段位）：版式参考 lumina 统计页 =====
