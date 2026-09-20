@@ -2485,6 +2485,199 @@
   background: linear-gradient(135deg, #f87171, #fbbf24, #34d399, #60a5fa);
 }
 
+/* ===== 表格视图工具行：搜索框 + 筛选（仅表格视图渲染这一行） =====
+   搜索框在左、筛选按钮在右（margin-left:auto 负责靠右），
+   高度与工具栏的 26px 段位相近（28px），圆角走胶囊形。
+   颜色全部走 --b3-* 变量，深浅主题自动适配。 */
+.north-caltab-table-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 10px;
+  flex-shrink: 0;
+}
+.north-caltab-search {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  flex: 0 1 260px;
+  min-width: 150px;
+  padding: 0 10px;
+  border-radius: 14px;
+  background: var(--b3-theme-surface);
+  transition: box-shadow 0.15s;
+}
+.north-caltab-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--b3-border-color);
+}
+.north-caltab-search-icon {
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.7;
+}
+.north-caltab-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.north-caltab-search-input::placeholder {
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-search-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--b3-theme-on-surface-light);
+  color: var(--b3-theme-surface);
+  cursor: pointer;
+  opacity: 0.55;
+}
+.north-caltab-search-clear:hover {
+  opacity: 0.9;
+}
+/* 筛选按钮：与搜索框同高的胶囊圆形按钮，有筛选或面板开着时高亮成主色 */
+.north-caltab-table-filter {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.north-caltab-filterbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.north-caltab-filterbtn:hover {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-filterbtn.active {
+  color: var(--b3-theme-primary);
+}
+/* 筛选面板：与类型筛选面板同一套浮层语言（边框 + 大圆角 + 投影），
+   靠右对齐到按钮，chips 按组换行铺开（对齐参考图的分组胶囊）。 */
+.north-caltab-filtermenu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 250px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 10px 12px 6px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+.north-caltab-filtermenu.open {
+  display: block;
+}
+.north-caltab-filterhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.north-caltab-filterhead-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-filterclear {
+  border: none;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.north-caltab-filterclear:hover {
+  color: var(--b3-theme-primary);
+}
+.north-caltab-filtergroup {
+  margin-bottom: 8px;
+}
+.north-caltab-filterlabel {
+  display: block;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  margin-bottom: 6px;
+}
+.north-caltab-filterchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.north-caltab-filterchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-filterchip:hover {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-filterchip.on {
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 12%,
+    var(--b3-theme-background)
+  );
+  color: var(--b3-theme-primary);
+}
+.north-caltab-filterchip .north-caltab-typedot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* 搜索高亮：内容列里命中的片段。主色淡底 + 主色字，不压行高，
+   深浅主题都走 --b3-theme-primary，不用各写一份。 */
+.north-caltab-table-mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 16%,
+    transparent
+  );
+  color: var(--b3-theme-primary);
+}
+
 /* 翻月 + 今天：合成一组分段控件 —— 左右箭头夹住「今天」，格子之间一条竖分隔线。
    只有一个外边框，所以三个格子看起来是一整块，而不是三个独立按钮。 */
 .north-caltab-navgroup {
@@ -3512,11 +3705,10 @@
   background: var(--b3-theme-background);
   border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 .north-caltab-habit-gcard:hover {
   border-color: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
-  box-shadow: 0 2px 10px color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
 }
 .north-caltab-habit-gcard-head {
   display: flex;
@@ -3672,7 +3864,7 @@
   width: 100%;
   aspect-ratio: 1; /* 正方：宽度由 flex 决定，高度跟着走，铺满整行 */
   border-radius: 3px;
-  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  background: color-mix(in srgb, var(--b3-theme-on-background) 5%, transparent);
 }
 /* 年外的日子（第一周开头 / 最后一周结尾）：**照样补一个格子**，只是更淡 ——
    与统计那张热力的 .is-empty 处理一致（同底色 + opacity 0.5）。
@@ -3680,6 +3872,378 @@
 .north-caltab-habit-cell.is-blank {
   background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
   opacity: 0.5;
+}
+/* ============ 习惯视图 · 周期切换（日 / 周 / 月 / 年 / 范围） ============ */
+/* 注意：本段的格子基础底色必须写在 .tt-lv1~5 **之前** —— 等级色靠
+   「同特异性后写的赢」压掉基础底色，写反了月历 / 周条 / 范围格会全变灰。 */
+/* 周期工具行：左边段位（复用 .north-caltab-segments 的样式），右边范围输入。
+   段位默认带 margin-left:auto（顶栏里靠右用的），这里顶到左边。 */
+.north-caltab-habit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.north-caltab-habit-toolbar .north-caltab-segments {
+  margin-left: 0;
+}
+/* 范围模式的起止日期：两枚胶囊字段按钮 + 「至」（自绘日历弹层替换原生 date 输入） */
+.north-caltab-habit-range {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-range-sep {
+  flex: 0 0 auto;
+}
+.north-caltab-habit-rfield {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+.north-caltab-habit-rfield:hover {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-rfield.open {
+  color: var(--b3-theme-primary);
+}
+/* 自绘日历弹层：与筛选面板同一套浮层语言（边框 + 大圆角 + 投影），
+   左对齐到字段行下方；一次只开一个字段的那一份。 */
+.north-caltab-habit-rcal {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 252px;
+  padding: 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+.north-caltab-habit-rcal.open {
+  display: block;
+}
+.north-caltab-habit-rcal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.north-caltab-habit-rcal-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 两侧圆头箭头：浅底圆钮，参考图的月头样式 */
+.north-caltab-habit-rcal-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.north-caltab-habit-rcal-arrow:hover {
+  background: var(--b3-list-hover, rgba(0, 0, 0, 0.06));
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-rcal-week,
+.north-caltab-habit-rcal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.north-caltab-habit-rcal-week span {
+  text-align: center;
+  padding: 2px 0 4px;
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-rcal-grid button {
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-background);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-habit-rcal-grid button:hover {
+  background: var(--b3-list-hover, rgba(0, 0, 0, 0.05));
+}
+.north-caltab-habit-rcal-grid button.is-out {
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.5;
+}
+/* 今天：主色字点一下；已选：主色实心白字（与筛选 chips / 打卡格同一套语言） */
+.north-caltab-habit-rcal-grid button.is-today {
+  color: var(--b3-theme-primary);
+  font-weight: 600;
+}
+.north-caltab-habit-rcal-grid button.is-sel,
+.north-caltab-habit-rcal-grid button.is-sel:hover {
+  background: var(--b3-theme-primary);
+  color: #fff;
+}
+/* ===== 周 / 月打卡点阵（对齐参考 App 的习惯打卡样式） =====
+   一格一个日子：有记录 = 类型色实心（多条显示次数 / 一条显示打勾），
+   没记录 = 类型色极淡底，未来日子 = 更淡一档，今天加一圈同色描边。
+   类型色统一走卡片上的 --tt-c，深浅主题不用各写一份。 */
+.north-caltab-habit-wdot,
+.north-caltab-habit-msq {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--tt-c) 12%, transparent);
+  color: var(--tt-c);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+/* 悬停：一圈同色细环，提示可以点进那天（与「今天」的描边同一语言） */
+.north-caltab-habit-wdot:hover,
+.north-caltab-habit-msq:hover {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tt-c) 40%, transparent);
+}
+/* 周：一行 7 列打卡圆点，圆点下带星期小字（周卡内用） */
+.north-caltab-habit-weekrow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.north-caltab-habit-wcol {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.north-caltab-habit-wdow {
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-wdot {
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  flex: 0 0 auto;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+/* 习惯头像：类型色淡底圆 + 名字首字（周行 / 月卡头部共用） */
+.north-caltab-habit-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--tt-c) 15%, transparent);
+  color: var(--tt-c);
+}
+/* 月：按真实日历排的 7 列方格网格 */
+.north-caltab-habit-mcal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.north-caltab-habit-msq {
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+}
+.north-caltab-habit-msq.is-blank {
+  background: transparent;
+  cursor: default;
+}
+/* 实心格：一条打勾、多条显示次数，白字压在类型色上 */
+.north-caltab-habit-wdot.is-done,
+.north-caltab-habit-wdot.is-count,
+.north-caltab-habit-msq.is-done,
+.north-caltab-habit-msq.is-count {
+  background: var(--tt-c);
+  color: #fff;
+}
+/* 未来日子：再淡一档，和「还没到的日子」一眼分开 */
+.north-caltab-habit-wdot.is-future,
+.north-caltab-habit-msq.is-future {
+  background: color-mix(in srgb, var(--tt-c) 5%, transparent);
+}
+/* 月卡底部的统计行：打卡天数 / 达标天数 */
+.north-caltab-habit-mfoot {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-mfoot b {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-mfoot .north-caltab-habit-sicon {
+  margin-right: 4px;
+  opacity: 0.7;
+}
+/* 月卡：一个习惯一张卡（头像 + 名字 + 网格 + 底部统计），
+   宽屏自适应多列，窄屏自动降列 —— 与分组收起卡同一套网格口径 */
+.north-caltab-habit-mcards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.north-caltab-habit-mcard {
+  padding: 12px 14px 13px;
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  border: 1px solid
+    color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+  box-shadow: 0 1px 3px
+    color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-habit-mcard-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.north-caltab-habit-mcard-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 头部右侧的目标小字：一眼知道这张卡在追什么目标 */
+.north-caltab-habit-mcard-goal {
+  flex: 1 1 auto;
+  margin-left: auto;
+  text-align: right;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ===== 日卡：特写锚点那一天（与周 / 月同一套卡片壳） =====
+   大号成绩 + 达标徽标，下面目标进度条 + 分数，底部统计行复用 -mfoot。 */
+.north-caltab-habit-dmain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.north-caltab-habit-dval {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  line-height: 1.2;
+}
+.north-caltab-habit-dbadge {
+  margin-left: auto;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+/* 达标：底色与文字同一类型色（底 12% 混合、文字实色），与旧徽标同一套手法 */
+.north-caltab-habit-dbadge.ok {
+  background: color-mix(in srgb, var(--tt-c) 12%, transparent);
+  color: var(--tt-c);
+}
+.north-caltab-habit-dbadge.no {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 8%, transparent);
+  color: var(--b3-theme-on-surface-light);
+}
+/* 目标进度条：类型色填充 + 右侧分数小字 */
+.north-caltab-habit-dgoarrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.north-caltab-habit-dtrack {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
+  overflow: hidden;
+}
+.north-caltab-habit-dtrack i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--tt-c);
+  transition: width 0.2s;
+}
+.north-caltab-habit-dfrac {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+/* 范围：流式小格子铺开，上日期下数值，格子底色 = 等级色 */
+.north-caltab-habit-rgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 5px;
+}
+.north-caltab-habit-rcell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 3%, transparent);
+}
+.north-caltab-habit-rcell.is-blank {
+  background: transparent;
+}
+.north-caltab-habit-rcell-date {
+  font-size: 10px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-rcell-val {
+  font-size: 12px;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-rnote {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  padding: 10px 0;
 }
 /* 5 级深浅：都是「类型色 + 背景」混出来的，换类型色自动跟着变。
    这一组是**共用的**（习惯格子、卡片里的等级说明、设置里的色块预览都用 .tt-lv1..5），

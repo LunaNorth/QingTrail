@@ -631,6 +631,22 @@
          切月 / 重绘都保留，重启插件回到全展开 —— 折叠是「当下想少看点」，
          不是什么需要长期记住的偏好。 */
       this._calTabTableCollapsed = new Set();
+      /* 表格视图工具行（搜索 + 筛选）的状态，同样只活在内存里：
+         搜索词（空串 = 没在搜）、时间范围筛选（"" = 全部 /
+         "today" / "week" / "month"）、筛选面板开合 —— 重绘后都据此恢复。 */
+      this._calTabTableSearch = "";
+      this._calTabTableTimeFilter = "";
+      this._calTabTableFilterOpen = false;
+      /* 习惯「范围」的自绘日历弹层：哪个日期字段开着（"" = 都关着）、
+         弹层正在浏览的月份（Date，1 号）—— 重绘后据此恢复。 */
+      this._calTabHabitRangePick = "";
+      this._calTabHabitRangeView = null;
+      /* 搜索输入触发的重绘要把焦点还给输入框（见 _paintCalendarTab），
+         这个标记只在该次重绘里有效 */
+      this._calTabSearchFocus = false;
+      this._calTabSearchTimer = null;
+      /* 收起表格筛选面板用的文档级监听（卸载时要摘掉） */
+      this._calTabTableFilterDocClick = null;
       /* 收起筛选面板用的文档级监听（卸载时要摘掉） */
       this._calTabTypesDocClick = null;
       /* 「创建的文档」这份数据的缓存；换数据源时整体作废 */
@@ -835,6 +851,20 @@
       if (this._calTabTypesDocClick) {
         document.removeEventListener("click", this._calTabTypesDocClick);
         this._calTabTypesDocClick = null;
+      }
+      /* 摘掉表格筛选面板的「点外部收起」监听，顺手清掉搜索的防抖定时器 */
+      if (this._calTabTableFilterDocClick) {
+        document.removeEventListener("click", this._calTabTableFilterDocClick);
+        this._calTabTableFilterDocClick = null;
+      }
+      /* 摘掉「范围」自绘日历的「点外部收起」监听 */
+      if (this._calTabRangeDocClick) {
+        document.removeEventListener("click", this._calTabRangeDocClick);
+        this._calTabRangeDocClick = null;
+      }
+      if (this._calTabSearchTimer) {
+        clearTimeout(this._calTabSearchTimer);
+        this._calTabSearchTimer = null;
       }
     }
 
@@ -1265,6 +1295,18 @@
                         <input type="number" min="1" max="9999" step="1" value="${cfg.goal}" data-habit-goal autocomplete="off">
                         <span>${goalSuffix}</span>
                     </label>
+                    <span class="tt-habitpick__goalrow" data-habit-lv1row>
+                        <span>浅档</span>
+                        ${segHtml(
+                          [
+                            { value: "", label: "标准" },
+                            { value: "mid", label: "适中" },
+                            { value: "deep", label: "较深" },
+                          ],
+                          cfg.lv1 || "",
+                          "lv1"
+                        )}
+                    </span>
                 </div>
             </div>`;
         })
@@ -1272,12 +1314,12 @@
       host.innerHTML =
         `<div class="tt-habitpick__chips">${chips}</div>` +
         (cfgs
-          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
+          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。「浅档」= 等级 1（打卡量最少那种）的深浅，只影响这个习惯：一天就记一次的习惯选「适中 / 较深」后，年视图里的格子更容易看见。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
           : "");
       /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
       host.onclick = (e) => {
-        /* 四段切换（单位 / 方向 / 周期 / 计法）共用一套逻辑 */
-        const ATTRS = ["unit", "dir", "period", "gunit"];
+        /* 五段切换（单位 / 方向 / 周期 / 计法 / 浅档）共用一套逻辑 */
+        const ATTRS = ["unit", "dir", "period", "gunit", "lv1"];
         for (const attr of ATTRS) {
           const btn = e.target.closest && e.target.closest(`[data-habit-${attr}]`);
           if (!btn) continue;
@@ -3544,8 +3586,16 @@
         return before ? "上个月" : "下个月";
       }
       if (view === "week") return before ? "上一周" : "下一周";
-      /* 习惯视图是一整年铺开的，翻页翻的是年 */
-      if (view === "habit") return before ? "上一年" : "下一年";
+      /* 习惯视图按自己选的周期翻：日 / 周 / 月 / 范围各有各的步长，
+         年就是原来的行为（翻整年） */
+      if (view === "habit") {
+        const p = this._calTabHabitPeriod || "year";
+        if (p === "day") return before ? "前一天" : "后一天";
+        if (p === "week") return before ? "上一周" : "下一周";
+        if (p === "month") return before ? "上个月" : "下个月";
+        if (p === "range") return before ? "上一段" : "下一段";
+        return before ? "上一年" : "下一年";
+      }
       /* 三日与日视图都是「一天一格」地翻，提示语一致 */
       if (view === "three" || view === "day") return before ? "前一天" : "后一天";
       return before ? "上个月" : "下个月";
@@ -4326,8 +4376,64 @@
       });
     }
 
+    /* 表格视图工具行的行匹配：搜索关键字（只搜「内容」这一列）+ 时间范围筛选
+       （类型筛选走共用的 _calTabTypeFilter，已经在 _calTabRecordsByDate 里筛过，
+       这里不重复）。搜索不分大小写；时间范围以「今天」为基准：
+       今日 / 本周（按设置的每周起始日对齐）/ 本月，落在范围外的行整行不出现。 */
+    _calTableRecordMatch(r, dateKey) {
+      const tf = this._calTabTableTimeFilter;
+      if (tf) {
+        if (!dateKey) return false;
+        const now = new Date();
+        if (tf === "today") {
+          if (dateKey !== this._calKey(now)) return false;
+        } else if (tf === "week") {
+          const start = this._calTabWeekStartDate(now);
+          const end = new Date(start);
+          end.setDate(start.getDate() + 6);
+          const d = new Date(`${dateKey}T00:00:00`);
+          if (d < start || d > end) return false;
+        } else if (tf === "month") {
+          if (dateKey.slice(0, 7) !== `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`)
+            return false;
+        }
+      }
+      const q = (this._calTabTableSearch || "").trim().toLowerCase();
+      if (q) {
+        const hay = this._brToSpace((r && r.content) || "").toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    }
+
+    /* 内容列的搜索高亮：把命中的片段包一层 mark（不分大小写，逐处都标）。
+       先按原文定位再分段转义，保证用户内容里有 < > & 也不会破结构。 */
+    _calTableHighlight(text, query) {
+      const raw = String(text == null ? "" : text);
+      const q = (query || "").trim().toLowerCase();
+      if (!q) return escapeHtml(raw);
+      const hay = raw.toLowerCase();
+      let out = "";
+      let i = 0;
+      while (i < raw.length) {
+        const hit = hay.indexOf(q, i);
+        if (hit < 0) {
+          out += escapeHtml(raw.slice(i));
+          break;
+        }
+        out += escapeHtml(raw.slice(i, hit));
+        out += `<mark class="north-caltab-table-mark">${escapeHtml(
+          raw.slice(hit, hit + q.length)
+        )}</mark>`;
+        i = hit + q.length;
+      }
+      return out;
+    }
+
     /* 表格视图的 HTML。返回 { count, html } —— 条数交给工具栏标题用。
-       日期倒序（离今天近的排上面，对齐参考图），同一天内按时间正序。 */
+       日期倒序（离今天近的排上面，对齐参考图），同一天内按时间正序。
+       工具行的搜索 / 筛选在这里生效：先逐日过滤行，整天都被筛空的日期
+       连分组头一起不出现，标题里的条数也跟着变成筛完的数量。 */
     _buildCalendarTableHtml(byDate, monthAnchor) {
       const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
       const y = monthAnchor.getFullYear();
@@ -4341,21 +4447,37 @@
       dates.reverse();
 
       const unit = this._calUnit();
-      const count = dates.reduce((n, k) => n + byDate[k].length, 0);
+      /* 搜索 + 筛选：先过滤再分组再计数，保证「标题条数 = 表里行数」 */
+      const days = dates
+        .map((key) => ({
+          key,
+          rows: this._calDayRows(
+            (byDate[key] || []).filter((r) => this._calTableRecordMatch(r, key))
+          ),
+        }))
+        .filter((d) => d.rows.length);
+      const count = days.reduce((n, d) => n + d.rows.length, 0);
       if (!count) {
+        /* 空态分两种：这个月真的一条都没有，还是被搜索 / 筛选筛空的 ——
+           后者给一句能直接照做的提示，别让人对着空白发呆 */
+        const constrained =
+          (this._calTabTableSearch || "").trim() ||
+          this._calTabTableTimeFilter ||
+          this._calTabTypeFilter.size > 0;
         /* 空态文案与「当天弹窗」同一套措辞：量词换成文档时切掉首字（篇文档→文档） */
         return {
           count: 0,
-          html: `<div class="north-caltab-table"><div class="north-caltab-table-empty">这一个月还没有${escapeHtml(
-            unit.slice(1)
+          html: `<div class="north-caltab-table"><div class="north-caltab-table-empty">${escapeHtml(
+            constrained
+              ? "没有匹配的记录，试试清空搜索或筛选"
+              : `这一个月还没有${unit.slice(1)}`
           )}</div></div>`,
         };
       }
 
       const collapsed = this._calTabTableCollapsed;
-      const body = dates
-        .map((key) => {
-          const rows = this._calDayRows(byDate[key]);
+      const body = days
+        .map(({ key, rows }) => {
           const day = new Date(`${key}T00:00:00`);
           const dayMin = rows.reduce((n, x) => n + (x.dur || 0), 0);
           const isToday = key === this._calKey(new Date());
@@ -4446,8 +4568,9 @@
                               }">${escapeHtml(typeName)}</span>`
                             : `<span class="north-caltab-table-none">—</span>`
                         }</td>
-                        <td class="north-caltab-table-content">${escapeHtml(
-                          this._brToSpace(r.content || "")
+                        <td class="north-caltab-table-content">${this._calTableHighlight(
+                          this._brToSpace(r.content || ""),
+                          this._calTabTableSearch
                         )}</td>
                         <td class="north-caltab-table-dur">${
                           x.dur ? this._fmtStatsDur(x.dur) : "—"
@@ -4560,7 +4683,12 @@
       if (period === "day") goalUnit = "value";
       goal = Math.max(1, Math.min(99999, Math.round(goal * 100) / 100));
 
-      return { unit, dir, period, goalUnit, goal, alias, group };
+      /* 浅档：等级 1 格子的浓度覆盖（"" = 标准 22%，"mid" = 32%，"deep" = 45%）。
+         打卡一次就达标的习惯（每天 ≥ 1 次）全年都落在等级 1，标准色偏浅，
+         让每个习惯自己决定要不要加深 —— 不影响别的习惯。 */
+      const lv1 = raw.lv1 === "mid" || raw.lv1 === "deep" ? raw.lv1 : "";
+
+      return { unit, dir, period, goalUnit, goal, alias, group, lv1 };
     }
 
     /* 写回某个习惯的目标模型（_persist 存的是整份 settings，新键自动落盘）。
@@ -4578,6 +4706,7 @@
         goal: g > 0 ? Math.min(99999, Math.round(g * 100) / 100) : HABIT_GOAL_DEFAULT[cfg.unit === "min" ? "min" : "count"],
         alias: String(cfg.alias == null ? "" : cfg.alias).trim(),
         group: String(cfg.group == null ? "" : cfg.group).trim(),
+        lv1: cfg.lv1 === "mid" || cfg.lv1 === "deep" ? cfg.lv1 : "",
       };
       this.data.habitConfig = all;
       this._persist("保存习惯目标");
@@ -4652,6 +4781,42 @@
           cnt,
           color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
         }));
+    }
+
+    /* 习惯视图「范围」模式的窗口：把起止日期串（YYYY-MM-DD）解析成 Date 与标题。
+       没配过（或没配全）就给默认「本月 1 日 ~ 今天」；起止颠倒时自动对调，
+       用户在两个输入框里先填了靠后的日期也不会显示成空白。 */
+    _habitRangeWindow() {
+      const mk = (s) => {
+        const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+      };
+      const today = new Date();
+      /* 范围存在插件数据里（this.data.habitRange，落盘持久）——
+         重启思源、重开插件都还在，除非用户自己改 / 重置。 */
+      const r = this.data.habitRange || {};
+      let s = mk(r.start);
+      let e = mk(r.end);
+      if (!s) s = new Date(today.getFullYear(), today.getMonth(), 1);
+      if (!e) e = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      if (s.getTime() > e.getTime()) {
+        const t = s;
+        s = e;
+        e = t;
+      }
+      const fk = (d) =>
+        d.getFullYear() +
+        "-" +
+        String(d.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(d.getDate()).padStart(2, "0");
+      return {
+        start: s,
+        end: e,
+        startKey: fk(s),
+        endKey: fk(e),
+        label: `${s.getMonth() + 1}月${s.getDate()}日 ~ ${e.getMonth() + 1}月${e.getDate()}日`,
+      };
     }
 
     /* 一年的「日期 → 带时长的行」算一次缓存起来，几个习惯共用。
@@ -4972,13 +5137,129 @@
     }
 
     /* 习惯视图主体：顶部「今日完成 x / y」+ 进度条，然后一个习惯一张卡，
-       最后一条**共用**的等级说明（几个习惯都是「合计时长」分级，说明一条就够）。 */
+       最后一条**共用**的等级说明（几个习惯都是「合计时长」分级，说明一条就够）。
+       视图自己带一组周期段位（日 / 周 / 月 / 年 / 范围）：年是原来的整年热力，
+       其余周期把每张卡的格子区换成对应窗口的展示（月历格 / 周条 / 单日 / 流式格）。 */
     _buildCalendarHabitHtml(year) {
       const types = this._habitTypes();
       const todayKey = this._calKey(new Date());
       const now = new Date();
+      /* 周期与锚点：_paintCalendarTab 已保证初始化，这里只兜底 */
+      const period = this._calTabHabitPeriod || "year";
+      const anchor =
+        this._calTabHabitAnchor instanceof Date ? this._calTabHabitAnchor : new Date();
+      const rangeWin = period === "range" ? this._habitRangeWindow() : null;
       const sicon = (id) =>
         `<svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#${id}"></use></svg>`;
+
+      /* 习惯头像：类型色淡底圆 + 名字首字（周列表 / 月卡头部共用） */
+      const avatar = (color, label) =>
+        `<span class="north-caltab-habit-avatar" style="--tt-c:${escapeHtml(
+          color
+        )}">${escapeHtml((label || "?").slice(0, 1))}</span>`;
+      /* 打卡点阵共用的单格内容与气泡：实心格里直接显示当天的记录条数
+         （1 条也显示 1，多条显示 2、3…），其余信息（时长 / 达标情况）
+         交给悬停气泡 —— 格子上只留一眼能读的。 */
+      const dotCell = (dt, raw, cls, key) => {
+        const isFuture = dt > now;
+        const all = cls.slice();
+        if (raw && raw.cnt > 1) all.push("is-count");
+        else if (raw) all.push("is-done");
+        if (isFuture) all.push("is-future");
+        if (key === todayKey) all.push("is-today");
+        const tip = raw
+          ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
+          : `${key} · 未记录`;
+        const inner = raw ? `${raw.cnt}` : "";
+        return `<div class="${all.join(
+          " "
+        )}" data-caltab-habitday="${key}" data-tip="${escapeHtml(tip)}">${inner}</div>`;
+      };
+
+      /* 周期段位行：与顶栏视图切换同一套段位样式（.north-caltab-segments）。
+         选「范围」时在右边补两个日期输入，改动即重绘（change 委托在容器上）。 */
+      const perBtn = (key, txt) =>
+        `<button class="${period === key ? "active" : ""}" data-caltab-habitper="${key}">${txt}</button>`;
+      let toolbarHtml = `<div class="north-caltab-habit-toolbar"><div class="north-caltab-segments north-caltab-habit-periods">${perBtn(
+        "day",
+        "日"
+      )}${perBtn("week", "周")}${perBtn("month", "月")}${perBtn(
+        "year",
+        "年"
+      )}${perBtn("range", "范围")}</div>`;
+      if (period === "range") {
+        /* 起止日期：两枚胶囊按钮 + 自绘日历弹层（替换原生 date 输入，
+           观感与插件其它浮层一致）。弹层一次只开一个字段，
+           浏览月份存在实例上（_calTabHabitRangeView）。 */
+        const rangeField = (which) => {
+          const d = which === "start" ? rangeWin.start : rangeWin.end;
+          const open = this._calTabHabitRangePick === which;
+          const wd = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+          return `<button class="north-caltab-habit-rfield${
+            open ? " open" : ""
+          }" data-caltab-rangebtn="${which}" data-tip="选择${
+            which === "start" ? "开始" : "结束"
+          }日期">${d.getMonth() + 1}月${d.getDate()}日 周${wd}</button>`;
+        };
+        /* 日历弹层：月头（两侧圆头箭头 + 居中年月）+ 快捷项一排 +
+           星期行（按设置的每周起始日）+ 整月网格（前后月的日子浅灰补齐）。
+           选中日 = 主色实心，今天 = 主色字；点格即选并收起。 */
+        const rangeCal = (which) => {
+          if (this._calTabHabitRangePick !== which) return "";
+          const view =
+            this._calTabHabitRangeView instanceof Date
+              ? this._calTabHabitRangeView
+              : new Date();
+          const y = view.getFullYear();
+          const m = view.getMonth();
+          const selKey = which === "start" ? rangeWin.startKey : rangeWin.endKey;
+          const ws = this._calWeekStart();
+          const first = new Date(y, m, 1);
+          const lead =
+            ws === 1
+              ? first.getDay() === 0
+                ? 6
+                : first.getDay() - 1
+              : first.getDay();
+          const dim = new Date(y, m + 1, 0).getDate();
+          const WD = ["日", "一", "二", "三", "四", "五", "六"];
+          const weekHead = Array.from(
+            { length: 7 },
+            (_, i) => `<span>${WD[(ws + i) % 7]}</span>`
+          ).join("");
+          /* 网格：首行按每周起始日留出上月尾巴，末尾补下月开头 —— 邻月日子浅灰 */
+          const total = Math.ceil((lead + dim) / 7) * 7;
+          const start = new Date(y, m, 1 - lead);
+          let cells = "";
+          for (let i = 0; i < total; i++) {
+            const dt = new Date(start);
+            dt.setDate(start.getDate() + i);
+            const key = this._calKey(dt);
+            const cls = [];
+            if (dt.getMonth() !== m) cls.push("is-out");
+            if (key === todayKey) cls.push("is-today");
+            if (key === selKey) cls.push("is-sel");
+            cells += `<button type="button" class="${cls.join(
+              " "
+            )}" data-caltab-rangepick="${key}">${dt.getDate()}</button>`;
+          }
+          return `<div class="north-caltab-habit-rcal open" data-caltab-rcal="${which}">
+                    <div class="north-caltab-habit-rcal-head">
+                        <button type="button" class="north-caltab-habit-rcal-arrow" data-caltab-rangenav="prev" data-tip="上个月"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#iconLeft"></use></svg></button>
+                        <span class="north-caltab-habit-rcal-title">${y}年${m + 1}月</span>
+                        <button type="button" class="north-caltab-habit-rcal-arrow" data-caltab-rangenav="next" data-tip="下个月"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#iconRight"></use></svg></button>
+                    </div>
+                    <div class="north-caltab-habit-rcal-week">${weekHead}</div>
+                    <div class="north-caltab-habit-rcal-grid">${cells}</div>
+                </div>`;
+        };
+        toolbarHtml += `<div class="north-caltab-habit-range">${rangeField(
+          "start"
+        )}<span class="north-caltab-habit-range-sep">至</span>${rangeField(
+          "end"
+        )}${rangeCal("start")}${rangeCal("end")}</div>`;
+      }
+      toolbarHtml += `</div>`;
 
       if (!types.length) {
         return `<div class="north-caltab-habit">
@@ -4999,6 +5280,87 @@
         const label = cfg.alias || type;
         const { days, totalCnt, totalMin } = this._habitYearData(type, year);
         const dayVal = (d) => this._habitDayValue(days, this._calKey(d), cfg);
+        /* 「浅档」覆盖（设置里按习惯选）：等级 1 格子的浓度内联加深，
+           直接压过共用的 .tt-lv1 —— 只影响这个习惯，别的习惯照旧。
+           适中 = 32%，较深 = 45%；标准 = 不加任何内联样式（22%）。 */
+        const lv1Attr = (lvl) => {
+          if (lvl !== 1 || !cfg.lv1) return "";
+          const mix = cfg.lv1 === "deep" ? 45 : 32;
+          return ` style="background:color-mix(in srgb, ${escapeHtml(
+            color
+          )} ${mix}%, var(--b3-theme-background))"`;
+        };
+
+        /* 某一天的展示信息：当天成绩、本期累计、等级、气泡文案。
+           累计口径与年热力完全一致：周目标按周重置、月目标按月重置，
+           从周期头一天累到当天 —— 月 / 周 / 范围这些非年视图的格子
+           全部从这里取数，保证几种视图是同一个口径，不会各算各的。 */
+        const cellInfo = (dt) => {
+          const key = this._calKey(dt);
+          const raw = days[key];
+          const v = dayVal(dt);
+          let cum = cfg.goalUnit === "days" ? (v > 0 ? 1 : 0) : v;
+          if (cfg.period === "week") {
+            for (
+              let d = new Date(this._calTabWeekStartDate(dt));
+              d < dt;
+              d.setDate(d.getDate() + 1)
+            ) {
+              const dv = dayVal(d);
+              cum += cfg.goalUnit === "days" ? (dv > 0 ? 1 : 0) : dv;
+            }
+          } else if (cfg.period === "month") {
+            for (
+              let d = new Date(dt.getFullYear(), dt.getMonth(), 1);
+              d < dt;
+              d.setDate(d.getDate() + 1)
+            ) {
+              const dv = dayVal(d);
+              cum += cfg.goalUnit === "days" ? (dv > 0 ? 1 : 0) : dv;
+            }
+          }
+          const lvl = this._habitLevelOf(cfg, v, cum);
+          const tip = raw
+            ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
+            : `${key} · 未记录`;
+          const tipTail =
+            cfg.period === "day"
+              ? this._habitPeriodAchieved(cfg, v)
+                ? "达标"
+                : "未达标"
+              : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
+          return { key, raw, v, cum, lvl, tip: `${tip} · ${tipTail}` };
+        };
+
+        /* —— 非年周期的格子区（年热力走下面原有的那段） ——
+           周 / 月两个周期已改走外面的 weekCardHtml / mcardHtml（都是卡片），
+           卡片本身只剩 范围 / 年热力 两种格子区（周 / 月 / 日都改走外面的卡片构建器）。 */
+        /* 范围：范围内每天一格流式铺开（跨年的日子取不到当年数据，按空格处理） */
+        const mkRange = () => {
+          const len = Math.round((rangeWin.end - rangeWin.start) / 86400000) + 1;
+          if (len <= 0 || len > 366)
+            return `<div class="north-caltab-habit-rnote">范围无效（最长 366 天）</div>`;
+          let cells = "";
+          for (let i = 0; i < len; i++) {
+            const dt = new Date(rangeWin.start);
+            dt.setDate(rangeWin.start.getDate() + i);
+            if (dt.getFullYear() !== year) {
+              cells += `<div class="north-caltab-habit-rcell is-blank"></div>`;
+              continue;
+            }
+            const info = cellInfo(dt);
+            const valTxt =
+              cfg.unit === "min" ? this._fmtStatsDur(info.v) : `${fmtN(info.v)}`;
+            cells += `<div class="north-caltab-habit-rcell${
+              info.lvl ? " tt-lv" + info.lvl : ""
+            }"${lv1Attr(info.lvl)} data-caltab-habitday="${info.key}" data-tip="${escapeHtml(
+              info.tip
+            )}"><span class="north-caltab-habit-rcell-date">${dt.getMonth() + 1}/${
+              dt.getDate()
+            }</span><b class="north-caltab-habit-rcell-val">${valTxt}</b></div>`;
+          }
+          return `<div class="north-caltab-habit-rgrid">${cells}</div>`;
+        };
 
         /* 总览里这一项算不算达成：按各自周期结算 —— 日目标看今天、
            周目标看本周、月目标看本月（好习惯 ≥ 目标，坏习惯 < 目标） */
@@ -5055,6 +5417,10 @@
           statGoal = cfg.goal;
           statSuffix = cfg.goalUnit === "days" ? " 天" : "";
         }
+        /* 格子区按周期分发：年 = 下面这段整年热力（原样保留），
+           其余周期用上面几个构建器换成对应窗口的展示 */
+        let heatHtml = "";
+        if (period === "year") {
         /* 年格子：一整年铺成「列＝周、行＝星期日→六」，月份标在下方 ——
            版式与尺寸照抄统计视图那张「全年记录热力」（1:1 复刻 lumina 贡献图），
            只是配色换成这个习惯的类型色。年外的日子留空（透明，不占视觉）。 */
@@ -5120,7 +5486,7 @@
                 : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
             col += `<i class="${cls.join(
               " "
-            )}" data-caltab-habitday="${key}" data-tip="${escapeHtml(
+            )}"${lv1Attr(lvl)} data-caltab-habitday="${key}" data-tip="${escapeHtml(
               `${tip} · ${tipTail}`
             )}"></i>`;
           }
@@ -5136,6 +5502,13 @@
             ).toFixed(2)}%">${name}</span>`;
           })
           .join("");
+        heatHtml = `<div class="north-caltab-habit-heat">
+                    <div class="north-caltab-habit-heatcols">${heatCols}</div>
+                    <div class="north-caltab-habit-heatmonths">${heatMonths}</div>
+                </div>`;
+        } else if (period === "range") {
+          heatHtml = mkRange();
+        }
         /* 等级说明按目标模型生成（色块用该习惯的类型色 --tt-c）：
            日目标（好）：等级k ≥ k×目标；日目标（坏）：达标 < 目标（不上色），等级k = 超标 k 倍起；
            周 / 月目标：等级1 = 有记录，等级2~5 = 本期累计 ≥25/50/75/100% 目标 */
@@ -5144,7 +5517,9 @@
           legend = [1, 2, 3, 4, 5]
             .map(
               (k) =>
-                `<span><i class="north-caltab-habit-cell tt-lv${k}"></i>${
+                `<span><i class="north-caltab-habit-cell tt-lv${k}"${
+                  k === 1 ? lv1Attr(1) : ""
+                }></i>${
                   cfg.dir === "bad" ? "超标 ≥" : "≥"
                 } ${habitUnitLabel(cfg.unit, fmtN(k * cfg.goal))}</span>`
             )
@@ -5167,7 +5542,9 @@
           legend = bandLabels
             .map(
               ([lv, txt]) =>
-                `<span><i class="north-caltab-habit-cell tt-lv${lv}"></i>等级${lv} ${txt}</span>`
+                `<span><i class="north-caltab-habit-cell tt-lv${lv}"${
+                  lv === 1 ? lv1Attr(1) : ""
+                }></i>等级${lv} ${txt}</span>`
             )
             .join("");
           legend += `<span>（按${cfg.period === "week" ? "周" : "月"}累计${
@@ -5227,12 +5604,214 @@
         )}</b></span>
                     </span>
                 </div>
-                <div class="north-caltab-habit-heat">
-                    <div class="north-caltab-habit-heatcols">${heatCols}</div>
-                    <div class="north-caltab-habit-heatmonths">${heatMonths}</div>
-                </div>
-                <div class="north-caltab-habit-legend">${legend}</div>
+                <div class="north-caltab-habit-heat">${heatHtml}</div>
+                ${
+                  period === "year" || period === "range"
+                    ? `<div class="north-caltab-habit-legend">${legend}</div>`
+                    : ""
+                }
             </div>`;
+      };
+
+      /* —— 周视图：一个面板、一行一个习惯（对齐参考 App 的周打卡列表） ——
+         左边 = 类型色头像（名字首字）+ 名字，右边 = 7 个打卡圆点。
+         头部总览的「本期达成 x/y」要继续有数：这里按各习惯自己的目标模型
+         判断当前这一期是否达成，与 cardHtml 里的口径一致。 */
+      const achievedNow = (type) => {
+        const cfg = this._habitConfig(type);
+        const { days } = this._habitYearData(type, year);
+        if (cfg.period === "day") {
+          return this._habitPeriodAchieved(
+            cfg,
+            this._habitDayValue(days, this._calKey(new Date()), cfg)
+          );
+        }
+        if (cfg.period === "week") {
+          return this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(days, cfg, this._calTabWeekStartDate(new Date()), 7)
+          );
+        }
+        return this._habitPeriodAchieved(
+          cfg,
+          this._habitPeriodSum(
+            days,
+            cfg,
+            new Date(year, now.getMonth(), 1),
+            new Date(year, now.getMonth() + 1, 0).getDate()
+          )
+        );
+      };
+      /* —— 周视图：一个习惯一张卡（与月卡同一套卡片语言） ——
+         头 = 头像 + 名字 + 目标小字；身 = 7 列打卡圆点（每列圆点 + 星期小字）；
+         脚 = 本周打卡 / 达标天数。顶部总览的「本期达成 x/y」继续有数。 */
+      const weekCardHtml = (type) => {
+        const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
+        const cfg = this._habitConfig(type);
+        const label = cfg.alias || type;
+        const { days } = this._habitYearData(type, year);
+        const dayVal = (d) => this._habitDayValue(days, this._calKey(d), cfg);
+        const WD = ["日", "一", "二", "三", "四", "五", "六"];
+        const w0 = this._calTabWeekStartDate(anchor);
+        let cells = "";
+        let hitDays = 0;
+        let okDays = 0;
+        for (let i = 0; i < 7; i++) {
+          const dt = new Date(w0);
+          dt.setDate(w0.getDate() + i);
+          const key = this._calKey(dt);
+          const raw = days[key];
+          if (raw) {
+            hitDays += 1;
+            if (this._habitPeriodAchieved(cfg, dayVal(dt))) okDays += 1;
+          }
+          cells += `<div class="north-caltab-habit-wcol">${dotCell(
+            dt,
+            raw,
+            ["north-caltab-habit-wdot"],
+            key
+          )}<span class="north-caltab-habit-wdow">周${WD[dt.getDay()]}</span></div>`;
+        }
+        if (achievedNow(type)) doneCount += 1;
+        return `<div class="north-caltab-habit-mcard north-caltab-habit-wcard" style="--tt-c:${escapeHtml(
+          color
+        )}">
+                <div class="north-caltab-habit-mcard-head">${avatar(
+                  color,
+                  label
+                )}<span class="north-caltab-habit-mcard-name">${escapeHtml(
+          label
+        )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
+          habitGoalText(cfg)
+        )}</span></div>
+                <div class="north-caltab-habit-weekrow">${cells}</div>
+                <div class="north-caltab-habit-mfoot"><span>${sicon(
+                  "iconCheck"
+                )}打卡 <b>${hitDays}</b> 天</span><span>${sicon(
+          "iconCalendar"
+        )}达标 <b>${okDays}</b> 天</span></div>
+            </div>`;
+      };
+
+      /* —— 月视图：一个习惯一张卡（对齐参考 App 的月打卡卡） ——
+         头 = 头像 + 名字，身 = 按真实日历排的 7 列打卡方格，
+         脚 = 打卡天数 / 达标天数（达标按各自目标模型，坏习惯方向照算）。 */
+      const mcardHtml = (type) => {
+        const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
+        const cfg = this._habitConfig(type);
+        const label = cfg.alias || type;
+        const { days } = this._habitYearData(type, year);
+        const dayVal = (d) => this._habitDayValue(days, this._calKey(d), cfg);
+        const y = anchor.getFullYear();
+        const m = anchor.getMonth();
+        const dim = new Date(y, m + 1, 0).getDate();
+        const first = new Date(y, m, 1);
+        const ws = this._calWeekStart();
+        const lead =
+          ws === 1
+            ? first.getDay() === 0
+              ? 6
+              : first.getDay() - 1
+            : first.getDay();
+        let cells = "";
+        for (let i = 0; i < lead; i++)
+          cells += `<i class="north-caltab-habit-msq is-blank"></i>`;
+        let hitDays = 0;
+        let okDays = 0;
+        for (let d = 1; d <= dim; d++) {
+          const dt = new Date(y, m, d);
+          const key = this._calKey(dt);
+          const raw = days[key];
+          if (raw) {
+            hitDays += 1;
+            if (this._habitPeriodAchieved(cfg, dayVal(dt))) okDays += 1;
+          }
+          cells += dotCell(dt, raw, ["north-caltab-habit-msq"], key);
+        }
+        const trail = (7 - ((lead + dim) % 7)) % 7;
+        for (let i = 0; i < trail; i++)
+          cells += `<i class="north-caltab-habit-msq is-blank"></i>`;
+        if (achievedNow(type)) doneCount += 1;
+        return `<div class="north-caltab-habit-mcard" style="--tt-c:${escapeHtml(
+          color
+        )}">
+                <div class="north-caltab-habit-mcard-head">${avatar(
+                  color,
+                  label
+                )}<span class="north-caltab-habit-mcard-name">${escapeHtml(
+          label
+        )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
+          habitGoalText(cfg)
+        )}</span></div>
+                <div class="north-caltab-habit-mcal">${cells}</div>
+                <div class="north-caltab-habit-mfoot"><span>${sicon(
+                  "iconCheck"
+                )}打卡 <b>${hitDays}</b> 天</span><span>${sicon(
+          "iconCalendar"
+        )}达标 <b>${okDays}</b> 天</span></div>
+            </div>`;
+      };
+
+      /* —— 日视图：一个习惯一张卡（与周 / 月同一套卡片语言） ——
+         特写「锚点那一天」：大号成绩 + 达标徽标 + 目标进度条 + 底部统计。
+         徽标口径与旧版一致：日目标看当天，坏习惯不达标时显示「未达标」。 */
+      const dayCardHtml = (type) => {
+        const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
+        const cfg = this._habitConfig(type);
+        const label = cfg.alias || type;
+        const { days } = this._habitYearData(type, year);
+        const v = this._habitDayValue(days, this._calKey(anchor), cfg);
+        const raw = days[this._calKey(anchor)];
+        const ok = this._habitPeriodAchieved(cfg, v);
+        const badge = ok ? "达标" : cfg.dir === "bad" ? "超标" : "未达标";
+        const r1 = (n) => Math.round(n * 10) / 10;
+        const valTxt =
+          cfg.unit === "min" ? this._fmtStatsDur(v) : `${r1(v)} 次`;
+        const goal = cfg.goal > 0 ? cfg.goal : 0;
+        const pct =
+          goal > 0 ? Math.min(100, Math.round((v / goal) * 100)) : v > 0 ? 100 : 0;
+        if (achievedNow(type)) doneCount += 1;
+        return `<div class="north-caltab-habit-mcard north-caltab-habit-dcard" style="--tt-c:${escapeHtml(
+          color
+        )}">
+                <div class="north-caltab-habit-mcard-head">${avatar(
+                  color,
+                  label
+                )}<span class="north-caltab-habit-mcard-name">${escapeHtml(
+          label
+        )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
+          habitGoalText(cfg)
+        )}</span></div>
+                <div class="north-caltab-habit-dmain"><b class="north-caltab-habit-dval">${valTxt}</b><span class="north-caltab-habit-dbadge ${
+                  ok ? "ok" : "no"
+                }">${badge}</span></div>
+                <div class="north-caltab-habit-dgoarrow"><div class="north-caltab-habit-dtrack"><i style="width:${pct}%"></i></div><span class="north-caltab-habit-dfrac">${r1(
+                  v
+                )}/${r1(goal)}</span></div>
+                <div class="north-caltab-habit-mfoot"><span>${sicon(
+                  "iconCheck"
+                )}${raw ? raw.cnt : 0} ${this._calUnit()}</span><span>${sicon(
+          "iconCalendar"
+        )}共 <b>${this._fmtStatsDur(raw ? raw.min : 0)}</b></span></div>
+            </div>`;
+      };
+
+      /* 周 / 月 / 日下习惯条目换皮，年 / 范围仍走 cardHtml；
+         三种周期都是卡片网格，分组节内同样生效。 */
+      const itemsHtml = (list) => {
+        if (period === "week")
+          return `<div class="north-caltab-habit-mcards">${list
+            .map(weekCardHtml)
+            .join("")}</div>`;
+        if (period === "month")
+          return `<div class="north-caltab-habit-mcards">${list
+            .map(mcardHtml)
+            .join("")}</div>`;
+        if (period === "day")
+          return `<div class="north-caltab-habit-mcards">${list
+            .map(dayCardHtml)
+            .join("")}</div>`;
+        return list.map(cardHtml).join("");
       };
 
       /* 分组分节：**至少有一个习惯真正进了分组**才启用分节展示 ——
@@ -5398,11 +5977,11 @@
             : ""
         }<span class="north-caltab-habit-sec-chev">${chevSvg}</span></div>
                 ${isThisYear ? gsumHtml(g.members) : ""}
-                ${g.members.map(cardHtml).join("")}
+                ${itemsHtml(g.members)}
             </div>`;
 
       if (!groupedCount) {
-        bodyHtml = types.map(cardHtml).join("");
+        bodyHtml = itemsHtml(types);
       } else {
         /* 收起的组排成自适应卡片网格（宽屏三列、窄屏自动降列），
            展开的组按原样整节展示，各自保持设置里的组顺序 */
@@ -5423,7 +6002,7 @@
             ? `<div class="north-caltab-habit-gcards">${cards.join("")}</div>`
             : "") +
           secs.join("") +
-          rest.map(cardHtml).join("");
+          (rest.length ? itemsHtml(rest) : "");
       }
 
       /* 顶部那行：只要有一个习惯不是日目标，说「今日完成」就不诚实了 ——
@@ -5431,6 +6010,7 @@
       const allDaily = types.every((t) => this._habitConfig(t).period === "day");
       const pct = Math.round((doneCount / types.length) * 100);
       return `<div class="north-caltab-habit">
+            ${toolbarHtml}
             <div class="north-caltab-habit-sum">
                 <span class="north-caltab-habit-sum-text">${
                   allDaily ? "今日完成" : "本期达成"
@@ -6073,15 +6653,37 @@
           monthAnchor.getMonth() + 1
         }月 · ${table.count} ${this._calUnit()}`;
       }
-      /* 习惯视图看的是「一整年」，锚点独立于月 / 日那几个 —— 翻页翻的是年 */
+      /* 习惯视图的周期状态：日 / 周 / 月 / 年 / 范围（默认年，与旧版行为一致）。
+         锚点独立于月 / 时间轴 / 统计那几个存，翻页翻的是当前周期；
+         旧版只存年份（_calTabHabitYear），现在统一由锚点推年份。 */
+      if (isHabit) {
+        if (!this._calTabHabitPeriod) this._calTabHabitPeriod = "year";
+        if (!(this._calTabHabitAnchor instanceof Date)) {
+          this._calTabHabitAnchor = new Date();
+        }
+      }
       const habitYear = isHabit
-        ? this._calTabHabitYear || new Date().getFullYear()
+        ? this._calTabHabitAnchor.getFullYear()
         : 0;
       if (isHabit) {
         const n = this._habitTypes().length;
-        title = n
-          ? `${habitYear}年 · ${n} 个习惯`
-          : `${habitYear}年 · 习惯`;
+        const suffix = n ? ` · ${n} 个习惯` : " · 习惯";
+        const hp = this._calTabHabitPeriod || "year";
+        const ha = this._calTabHabitAnchor;
+        if (hp === "day") {
+          title = `${ha.getFullYear()}年${ha.getMonth() + 1}月${ha.getDate()}日${suffix}`;
+        } else if (hp === "week") {
+          const w0 = this._calTabWeekStartDate(ha);
+          const w1 = new Date(w0);
+          w1.setDate(w0.getDate() + 6);
+          title = `${w0.getMonth() + 1}月${w0.getDate()}日 ~ ${w1.getMonth() + 1}月${w1.getDate()}日${suffix}`;
+        } else if (hp === "month") {
+          title = `${ha.getFullYear()}年${ha.getMonth() + 1}月${suffix}`;
+        } else if (hp === "range") {
+          title = `${this._habitRangeWindow().label}${suffix}`;
+        } else {
+          title = `${ha.getFullYear()}年${suffix}`;
+        }
       }
 
       /* 月视图才需要算三个月的格子（126 格，每格都要算农历 / 节气），
@@ -6143,6 +6745,81 @@
         )
         .join("");
 
+      /* 表格视图的工具行：搜索框 + 筛选按钮（面板）。只在这一段位渲染；
+         搜索词 / 时间筛选 / 面板开合都存实例上，重绘后原样恢复。
+         类型这组直接复用工具栏那份类型筛选（_calTabTypeFilter）——
+         两处筛的是同一个东西，不该出现两套口径。 */
+      let tableToolsHtml = "";
+      if (isTable) {
+        const q = this._calTabTableSearch || "";
+        const timeF = this._calTabTableTimeFilter || "";
+        const tableFilterOn = typeFilterOn || !!timeF || !!q.trim();
+        const tableFilterOpen = !!this._calTabTableFilterOpen;
+        const noun = this._calUnit().slice(1);
+        const typeChips = this._calTabTypeOptions()
+          .map(
+            (o) =>
+              `<button class="north-caltab-filterchip${
+                this._calTabTypeFilter.has(o.name) ? " on" : ""
+              }" data-caltab-tfilter="${escapeHtml(o.name)}">` +
+              `<span class="north-caltab-typedot" style="background:${o.color}"></span>` +
+              `${escapeHtml(o.name)}</button>`
+          )
+          .join("");
+        const timeChips = [
+          ["", "全部"],
+          ["today", "今日"],
+          ["week", "本周"],
+          ["month", "本月"],
+        ]
+          .map(
+            ([v, label]) =>
+              `<button class="north-caltab-filterchip${
+                timeF === v ? " on" : ""
+              }" data-caltab-tftime="${v}">${label}</button>`
+          )
+          .join("");
+        tableToolsHtml = `
+            <div class="north-caltab-table-tools">
+                <div class="north-caltab-search">
+                    <svg class="north-caltab-search-icon" viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconSearch"></use></svg>
+                    <input class="north-caltab-search-input" type="text" placeholder="搜索${escapeHtml(
+                      noun
+                    )}" value="${escapeHtml(q)}" data-caltab-search />
+                    ${
+                      q
+                        ? `<button class="north-caltab-search-clear" data-caltab-search-clear data-tip="清空搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="10" height="10"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>`
+                        : ""
+                    }
+                </div>
+                <div class="north-caltab-table-filter">
+                    <button class="north-caltab-filterbtn${
+                      tableFilterOn || tableFilterOpen ? " active" : ""
+                    }" data-caltab-tablefilter data-tip="筛选">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconAlignCenter"></use></svg>
+                    </button>
+                    <div class="north-caltab-filtermenu${
+                      tableFilterOpen ? " open" : ""
+                    }">
+                        <div class="north-caltab-filterhead">
+                            <span class="north-caltab-filterhead-title">筛选${escapeHtml(
+                              noun
+                            )}</span>
+                            <button class="north-caltab-filterclear" data-caltab-filter-clear>清除</button>
+                        </div>
+                        <div class="north-caltab-filtergroup">
+                            <span class="north-caltab-filterlabel">类型</span>
+                            <div class="north-caltab-filterchips">${typeChips}</div>
+                        </div>
+                        <div class="north-caltab-filtergroup">
+                            <span class="north-caltab-filterlabel">时间</span>
+                            <div class="north-caltab-filterchips">${timeChips}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+      }
+
       container.innerHTML = `
             <div class="north-caltab-bar">
                 <span class="north-caltab-title">${title}</span>
@@ -6181,6 +6858,7 @@
                     </button>
                 </div>
             </div>
+            ${tableToolsHtml}
             ${body}
             <div class="north-caltab-modal" id="northCaltabModal" style="display:none">
                 <div class="north-caltab-modal-bg"></div>
@@ -6224,6 +6902,21 @@
             : WEEK_INITIAL_HOUR * WEEK_HOUR_H;
         }
         return;
+      }
+
+      /* 表格视图：搜索输入触发的重绘，要把焦点和光标还给输入框 ——
+         否则打一个字就失焦，没法连续输入。标记只对该次重绘生效，
+         点筛选 chips 之类的重绘不会来抢焦点。 */
+      if (isTable && this._calTabSearchFocus) {
+        this._calTabSearchFocus = false;
+        const searchInput = container.querySelector("[data-caltab-search]");
+        if (searchInput) {
+          searchInput.focus();
+          const len = (searchInput.value || "").length;
+          try {
+            searchInput.setSelectionRange(len, len);
+          } catch (e) {}
+        }
       }
 
       /* 月视图：初始停在中间那一屏（本月）—— 三块等高，所以下标 1 就是本月。
@@ -6423,7 +7116,81 @@
     _bindCalendarTab(container) {
       if (!container || container._caltabBound) return;
       container._caltabBound = true;
-      /* 点面板外收起筛选面板。挂文档级、只挂一份，卸载时摘掉。
+      /* 表格视图的搜索框：输入即过滤。重绘整页后由 _paintCalendarTab
+         把焦点还给输入框（见 _calTabSearchFocus），这里只做防抖。
+         输入法组词（isComposing）期间绝不重绘 —— 重绘会换掉输入框，
+         把正在打的拼音直接打断；等 compositionend 再统一过滤。 */
+      if (!container._caltabSearchInputBound) {
+        container._caltabSearchInputBound = true;
+        const applySearch = (value) => {
+          this._calTabTableSearch = value || "";
+          this._calTabSearchFocus = true;
+          clearTimeout(this._calTabSearchTimer);
+          this._calTabSearchTimer = setTimeout(() => {
+            if (container.isConnected) this._paintCalendarTab(container);
+          }, 160);
+        };
+        container.addEventListener("input", (e) => {
+          const inp =
+            e.target.closest && e.target.closest("[data-caltab-search]");
+          if (!inp) return;
+          this._calTabTableSearch = inp.value || "";
+          if (e.isComposing) return;
+          applySearch(inp.value);
+        });
+        container.addEventListener("compositionend", (e) => {
+          const inp =
+            e.target.closest && e.target.closest("[data-caltab-search]");
+          if (!inp) return;
+          applySearch(inp.value);
+        });
+      }
+      /* 点面板外收起表格筛选面板。挂文档级、只挂一份，卸载时摘掉。
+         收起时按钮的高亮按「是否真的有筛选在生效」重算，而不是一律去掉。 */
+      if (!this._calTabTableFilterDocClick) {
+        this._calTabTableFilterDocClick = (e) => {
+          if (!this._calTabTableFilterOpen) return;
+          if (
+            e.target &&
+            e.target.closest &&
+            e.target.closest(".north-caltab-table-filter")
+          )
+            return;
+          this._calTabTableFilterOpen = false;
+          document
+            .querySelectorAll(".north-caltab-filtermenu.open")
+            .forEach((m) => m.classList.remove("open"));
+          const stillOn =
+            this._calTabTypeFilter.size > 0 ||
+            !!this._calTabTableTimeFilter ||
+            !!(this._calTabTableSearch || "").trim();
+          document.querySelectorAll(".north-caltab-filterbtn").forEach((b) => {
+            b.classList.toggle("active", stillOn);
+          });
+        };
+        document.addEventListener("click", this._calTabTableFilterDocClick);
+      }
+      /* 点面板外收起「范围」的自绘日历弹层。挂文档级、只挂一份，卸载时摘掉。 */
+      if (!this._calTabRangeDocClick) {
+        this._calTabRangeDocClick = (e) => {
+          if (!this._calTabHabitRangePick) return;
+          if (
+            e.target &&
+            e.target.closest &&
+            e.target.closest(".north-caltab-habit-range")
+          )
+            return;
+          this._calTabHabitRangePick = "";
+          document
+            .querySelectorAll(".north-caltab-habit-rcal.open")
+            .forEach((m) => m.classList.remove("open"));
+          document
+            .querySelectorAll(".north-caltab-habit-rfield.open")
+            .forEach((b) => b.classList.remove("open"));
+        };
+        document.addEventListener("click", this._calTabRangeDocClick);
+      }
+      /* 点面板外收起类型筛选面板。挂文档级、只挂一份，卸载时摘掉。
          有筛选时按钮保持高亮，所以收起时按筛选状态重算，而不是一律去掉。 */
       if (!this._calTabTypesDocClick) {
         this._calTabTypesDocClick = (e) => {
@@ -6470,6 +7237,100 @@
           }
           /* 面板保持打开，方便连着勾几个；重绘会把面板恢复成打开态 */
           this._calTabTypeMenuOpen = true;
+          this._paintCalendarTab(container);
+          return;
+        }
+
+        /* —— 表格视图工具行：筛选面板开合 / 面板里的 chips / 清除 / 清空搜索。
+           类型 chips 写的是共用的 _calTabTypeFilter（与工具栏那份同步），
+           时间 chips 是单选（再点一次选中的就回到「全部」）。 —— */
+        if (
+          e.target.closest &&
+          e.target.closest(".north-caltab-filterbtn")
+        ) {
+          this._calTabTableFilterOpen = !this._calTabTableFilterOpen;
+          this._paintCalendarTab(container);
+          return;
+        }
+        const tChip = e.target.closest && e.target.closest("[data-caltab-tfilter]");
+        if (tChip) {
+          const name = tChip.dataset.caltabTfilter || "";
+          if (this._calTabTypeFilter.has(name)) this._calTabTypeFilter.delete(name);
+          else this._calTabTypeFilter.add(name);
+          this._paintCalendarTab(container);
+          return;
+        }
+        const tTime = e.target.closest && e.target.closest("[data-caltab-tftime]");
+        if (tTime) {
+          const v = tTime.dataset.caltabTftime || "";
+          this._calTabTableTimeFilter = this._calTabTableTimeFilter === v ? "" : v;
+          this._paintCalendarTab(container);
+          return;
+        }
+        if (e.target.closest && e.target.closest("[data-caltab-filter-clear]")) {
+          this._calTabTypeFilter.clear();
+          this._calTabTableTimeFilter = "";
+          this._calTabTableSearch = "";
+          this._paintCalendarTab(container);
+          return;
+        }
+        if (e.target.closest && e.target.closest("[data-caltab-search-clear]")) {
+          this._calTabTableSearch = "";
+          this._paintCalendarTab(container);
+          return;
+        }
+
+        /* —— 习惯「范围」的自绘日历：开合字段 / 翻月 / 选日期。
+           选中即写入插件数据 data.habitRange[start|end]（落盘持久）并收起；
+           起止写反了也没关系，_habitRangeWindow 会自动对调。 —— */
+        const rangeBtn =
+          e.target.closest && e.target.closest("[data-caltab-rangebtn]");
+        if (rangeBtn) {
+          const which = rangeBtn.dataset.caltabRangebtn || "start";
+          this._calTabHabitRangePick =
+            this._calTabHabitRangePick === which ? "" : which;
+          if (this._calTabHabitRangePick) {
+            /* 打开时让弹层先停在所选字段当前的那个月 */
+            const win = this._habitRangeWindow();
+            const d = this._calTabHabitRangePick === "start" ? win.start : win.end;
+            this._calTabHabitRangeView = new Date(
+              d.getFullYear(),
+              d.getMonth(),
+              1
+            );
+          }
+          this._paintCalendarTab(container);
+          return;
+        }
+        const rangeNav =
+          e.target.closest && e.target.closest("[data-caltab-rangenav]");
+        if (rangeNav) {
+          const dir = rangeNav.dataset.caltabRangenav === "next" ? 1 : -1;
+          const view =
+            this._calTabHabitRangeView instanceof Date
+              ? this._calTabHabitRangeView
+              : new Date();
+          this._calTabHabitRangeView = new Date(
+            view.getFullYear(),
+            view.getMonth() + dir,
+            1
+          );
+          this._paintCalendarTab(container);
+          return;
+        }
+        const rangePick =
+          e.target.closest && e.target.closest("[data-caltab-rangepick]");
+        if (rangePick) {
+          const key = rangePick.dataset.caltabRangepick || "";
+          if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+            /* 范围落盘：存进插件数据，重启思源后再次进范围还是这一段 */
+            const which = this._calTabHabitRangePick || "start";
+            const next = Object.assign({}, this.data.habitRange || {});
+            next[which] = key;
+            this.data.habitRange = next;
+            this._persist("保存习惯范围");
+          }
+          this._calTabHabitRangePick = "";
           this._paintCalendarTab(container);
           return;
         }
@@ -6554,6 +7415,21 @@
           this._paintCalendarTab(container);
           return;
         }
+        /* 习惯视图：周期段位切换（日 / 周 / 月 / 年 / 范围）。
+           切换时锚点回到今天（月视图锚到 1 号，避免 setMonth 溢出到下个月）。
+           范围的起止日期已落盘持久 —— 切走再切回范围，还是上次选的那一段。 */
+        const habitPerBtn =
+          e.target.closest && e.target.closest("[data-caltab-habitper]");
+        if (habitPerBtn) {
+          const p = habitPerBtn.dataset.caltabHabitper;
+          if (["day", "week", "month", "year", "range"].indexOf(p) >= 0) {
+            this._calTabHabitPeriod = p;
+            this._calTabHabitAnchor = new Date();
+            if (p === "month") this._calTabHabitAnchor.setDate(1);
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
         /* 习惯格子：跳到那一天的日视图（和统计柱子走同一条路，
            都是「点一个日期 → 去那一天看看」） */
         const habitCell =
@@ -6606,9 +7482,14 @@
               this._paintCalendarTab(container);
               return;
             }
-            /* 习惯视图的「今天」：回到今年 */
+            /* 习惯视图的「今天」：锚点回到今天；范围模式清掉已存的窗口
+               （落盘恢复默认 —— 下次进范围也是默认的「本月 1 号至今」） */
             if (this._calTabView === "habit") {
-              this._calTabHabitYear = new Date().getFullYear();
+              this._calTabHabitAnchor = new Date();
+              if ((this._calTabHabitPeriod || "year") === "range") {
+                this.data.habitRange = null;
+                this._persist("重置习惯范围");
+              }
               this._paintCalendarTab(container);
               return;
             }
@@ -6632,11 +7513,37 @@
             this._openSettingsModal();
             return;
           }
-          /* 习惯视图按年翻：它是一整年铺开的，锚点自己存（不碰日历焦点日，
-             也不碰统计的周期锚点） */
+          /* 习惯视图按当前周期翻：日 ±1 天、周 ±7 天、月 ±1 月、年 ±1 年；
+             范围整段平移（窗口长度不变）。锚点自己存，不碰日历焦点日，
+             也不碰统计的周期锚点。 */
           if (this._calTabView === "habit") {
-            const hy = this._calTabHabitYear || new Date().getFullYear();
-            this._calTabHabitYear = hy + (act === "next" ? 1 : -1);
+            const p = this._calTabHabitPeriod || "year";
+            const a = new Date(
+              this._calTabHabitAnchor instanceof Date
+                ? this._calTabHabitAnchor
+                : new Date()
+            );
+            const dir = act === "next" ? 1 : -1;
+            if (p === "day") a.setDate(a.getDate() + dir);
+            else if (p === "week") a.setDate(a.getDate() + 7 * dir);
+            else if (p === "month") a.setMonth(a.getMonth() + dir);
+            else if (p === "year") a.setFullYear(a.getFullYear() + dir);
+            else {
+              /* 范围模式：把整段窗口往前 / 往后挪自己的长度（同样落盘） */
+              const rw = this._habitRangeWindow();
+              const len = Math.round((rw.end - rw.start) / 86400000) + 1;
+              const fk = (d) =>
+                d.getFullYear() +
+                "-" +
+                String(d.getMonth() + 1).padStart(2, "0") +
+                "-" +
+                String(d.getDate()).padStart(2, "0");
+              const s2 = new Date(rw.start.getTime() + len * dir * 86400000);
+              const e2 = new Date(rw.end.getTime() + len * dir * 86400000);
+              this.data.habitRange = { start: fk(s2), end: fk(e2) };
+              this._persist("保存习惯范围");
+            }
+            this._calTabHabitAnchor = a;
             this._paintCalendarTab(container);
             return;
           }
