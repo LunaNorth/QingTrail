@@ -3905,19 +3905,22 @@
   padding: 0 10px;
   border: none;
   border-radius: 8px;
+  /* 中性灰底：与段位控件同一气质，不染类型色 / 主色（用户确认过） */
   background: var(--b3-theme-surface);
   color: var(--b3-theme-on-surface);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 .north-caltab-habit-rfield:hover {
   color: var(--b3-theme-on-background);
 }
 .north-caltab-habit-rfield.open {
-  color: var(--b3-theme-primary);
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: inset 0 0 0 1px var(--b3-border-color);
 }
 /* 自绘日历弹层：与筛选面板同一套浮层语言（边框 + 大圆角 + 投影），
    左对齐到字段行下方；一次只开一个字段的那一份。 */
@@ -4239,6 +4242,36 @@
 .north-caltab-habit-rcell-val {
   font-size: 12px;
   color: var(--b3-theme-on-background);
+}
+/* 上了等级色的范围格子：文字跟底色同源（对齐 .north-caltab-habit-goal 胶囊）。
+   浅档（lv1 / lv2）日期与数值都走类型色；深档（lv3+）底色太饱和，
+   文字回中性色，lv5（类型色实底）用白字 —— 保证每一档都读得清。 */
+.north-caltab-habit-rcell.tt-lv1 .north-caltab-habit-rcell-date,
+.north-caltab-habit-rcell.tt-lv2 .north-caltab-habit-rcell-date {
+  color: color-mix(
+    in srgb,
+    var(--tt-c, var(--b3-theme-primary)) 55%,
+    var(--b3-theme-on-surface)
+  );
+}
+.north-caltab-habit-rcell.tt-lv1 .north-caltab-habit-rcell-val,
+.north-caltab-habit-rcell.tt-lv2 .north-caltab-habit-rcell-val {
+  color: color-mix(
+    in srgb,
+    var(--tt-c, var(--b3-theme-primary)) 70%,
+    var(--b3-theme-on-surface)
+  );
+  font-weight: 600;
+}
+.north-caltab-habit-rcell.tt-lv3 .north-caltab-habit-rcell-val,
+.north-caltab-habit-rcell.tt-lv4 .north-caltab-habit-rcell-val {
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-habit-rcell.tt-lv5 .north-caltab-habit-rcell-date {
+  color: rgba(255, 255, 255, 0.85);
+}
+.north-caltab-habit-rcell.tt-lv5 .north-caltab-habit-rcell-val {
+  color: #fff;
 }
 .north-caltab-habit-rnote {
   font-size: 12px;

@@ -91,7 +91,11 @@
 
   /* 「创建的文档」一次最多取多少条：本年的全部文档，这个值只是兜底 ——
      一年写的文档数真超过它就把这个数字调大，别让它静默截断。 */
-  const CAL_DOCS_LIMIT = 2000;
+  const CAL_DOCS_LIMIT = 999999;
+  /* 记录源查询的上限：设一个「实际上限」—— 正常使用等于不设限，
+     天花板只防极端情况（误导入产生海量块时拖垮查询）。
+     列都是挑过的（不拖正文），十万行级也在毫秒到百毫秒之间。 */
+  const CAL_RECORDS_LIMIT = 999999;
 
   /* 表格视图的列定义：一处定义同时长出 colgroup 与表头 ——
      加列 / 改列宽 / 改列名只动这里，表头文字与列宽永远对得上。
@@ -3155,7 +3159,7 @@
       }
     }
 
-    /* 查询当前前缀的打标记录（最近 200 条）
+    /* 查询当前前缀的打标记录（上限 CAL_RECORDS_LIMIT 条，足够覆盖全部历史）
        前缀已在 normAttrPrefix 中白名单过滤，仅含小写字母、数字与连字符。 */
     async _queryLifeLogDockRecords() {
       const records = [];
@@ -3183,7 +3187,7 @@
                      LEFT JOIN blocks rb ON rb.id = b.root_id
                      WHERE b.type = 'p'
                      ORDER BY a1.value DESC, a2.value DESC, b.id
-                     LIMIT 200`;
+                     LIMIT ${CAL_RECORDS_LIMIT}`;
         const resp = await this._request("/api/query/sql", { stmt: sql });
         if (resp.code !== 0 || !Array.isArray(resp.data)) return records;
         for (const row of resp.data) {
