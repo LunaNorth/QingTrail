@@ -68,6 +68,26 @@
     { value: "value", label: "合计" },
     { value: "days", label: "天数" },
   ];
+  /* 习惯「查看窗口」的快捷预设：存的是**名字**不是日期 —— 相对「今天」每次现算，
+     所以「本月」到了下个月自己就是新的一月，不会停留在旧区间。
+     留空的 value 表示「跟随顶部」（不存任何东西），这也是老数据的状态。 */
+  const HABIT_VIEW_PRESETS = [
+    { value: "", label: "跟随顶部" },
+    { value: "month", label: "本月" },
+    { value: "prevMonth", label: "上月" },
+    { value: "d7", label: "近 7 天" },
+    { value: "d30", label: "近 30 天" },
+    { value: "d100", label: "近 100 天" },
+    { value: "custom", label: "自定义" },
+  ];
+  /* 预设名 → 胶囊上显示的短标签（custom 的标签由具体起止日期算出来） */
+  const HABIT_VIEW_LABEL = {
+    month: "本月",
+    prevMonth: "上月",
+    d7: "近 7 天",
+    d30: "近 30 天",
+    d100: "近 100 天",
+  };
   /* 门槛的单位后缀：3 次 / 30 分 */
   const habitUnitLabel = (unit, v) => (unit === "min" ? `${v} 分` : `${v} 次`);
   /* 目标一句话：每天 ≥ 5 次 / 每周 ≥ 3 天 / 每月 < 10 次 —— 卡片上的小徽标用 */
@@ -162,15 +182,24 @@
   /* 动态标记样式的 style 元素 id：按块属性把类型颜色映射到 --tt-c */
   const MARK_STYLE_ID = "tt-mark-style";
 
-  /* 下划线线宽：默认 0.75px，可在插件设置「控制设置 / 下划线粗细」中调整 */
+  /* 下划线线宽：默认 0.75px，可在插件设置「控制设置 / 下划线粗细」中调整。
+     0 = 无，即不画线（只保留可选的「记录底色」）。
+     这一档是给「和别的插件叠在一起」准备的：叶归等插件也会给 LifeLog 记录画底线，
+     两家同时开着时两条线会挨在一起、看起来比设定值粗一倍。把这边设成「无」，
+     标记还在（属性、底色、各视图照旧），只是不再抢那条线。 */
   const DEFAULT_MARK_LINE_WIDTH = 0.75;
-  const MARK_LINE_OPTIONS = [0.5, 0.75, 1, 1.5, 2].map((w) => ({
-    value: String(w),
-    label: `${w}px`,
-  }));
+  const MARK_LINE_OPTIONS = [
+    { value: "0", label: "无" },
+    ...[0.5, 0.75, 1, 1.5, 2].map((w) => ({ value: String(w), label: `${w}px` })),
+  ];
 
-  /* 规范化线宽：只接受候选档位，其余一律回退默认值 */
+  /* 规范化线宽：只接受候选档位（含 0 = 无），其余一律回退默认值。
+     注意空值要走兜底：Number(null) 与 Number("") 都是 0，会被误判成「无」，
+     所以先挡掉 null / undefined / 空串。 */
   const normLineWidth = (value) => {
+    if (value === null || value === undefined || value === "") {
+      return DEFAULT_MARK_LINE_WIDTH;
+    }
     const n = Number(value);
     return MARK_LINE_OPTIONS.some((o) => Number(o.value) === n)
       ? n
@@ -645,6 +674,12 @@
          弹层正在浏览的月份（Date，1 号）—— 重绘后据此恢复。 */
       this._calTabHabitRangePick = "";
       this._calTabHabitRangeView = null;
+      /* 上面那套自绘日历当前在改「谁的」范围："" = 顶部那对全局日期，
+         否则是习惯名（卡片上的查看窗口设置条共用同一份日历）。 */
+      this._calTabHabitRangeScope = "";
+      /* 习惯卡上「查看窗口」设置条：开着的那个习惯名（"" = 都关着）。
+         就地展开、不做浮层 —— 卡片网格会裁掉溢出的浮层。 */
+      this._calTabHabitViewOpen = "";
       /* 搜索输入触发的重绘要把焦点还给输入框（见 _paintCalendarTab），
          这个标记只在该次重绘里有效 */
       this._calTabSearchFocus = false;
@@ -1318,7 +1353,7 @@
       host.innerHTML =
         `<div class="tt-habitpick__chips">${chips}</div>` +
         (cfgs
-          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。「浅档」= 等级 1（打卡量最少那种）的深浅，只影响这个习惯：一天就记一次的习惯选「适中 / 较深」后，年视图里的格子更容易看见。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
+          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。「浅档」= 等级 1（打卡量最少那种）的深浅，只影响这个习惯：一天就记一次的习惯选「适中 / 较深」后，年视图里的格子更容易看见。另外，每个习惯想看的时段本来就不一样（打卡看「近 100 天」，另一个只看「本月」）—— 习惯卡名字旁边那枚日期胶囊可以给单个习惯单独设「查看窗口」，互不干扰；没设过的习惯继续跟习惯页顶部那排段位走。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
           : "");
       /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
       host.onclick = (e) => {
@@ -4788,8 +4823,9 @@
     }
 
     /* 习惯视图「范围」模式的窗口：把起止日期串（YYYY-MM-DD）解析成 Date 与标题。
-       没配过（或没配全）就给默认「本月 1 日 ~ 今天」；起止颠倒时自动对调，
-       用户在两个输入框里先填了靠后的日期也不会显示成空白。 */
+       没配过（或没配全）就给默认「本月 1 日 ~ 月末」（整月，与卡片上「查看窗口」
+       的「本月」预设口径一致）；起止颠倒时自动对调，用户在两个输入框里先填了
+       靠后的日期也不会显示成空白。 */
     _habitRangeWindow() {
       const mk = (s) => {
         const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -4801,8 +4837,10 @@
       const r = this.data.habitRange || {};
       let s = mk(r.start);
       let e = mk(r.end);
+      /* 默认给整月（月末那一天 = 下个月的第 0 天）。本月还没过完时，
+         尾巴上的日子在格子里会被压淡，一眼看得出是「未来」而不是「没记录」。 */
       if (!s) s = new Date(today.getFullYear(), today.getMonth(), 1);
-      if (!e) e = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      if (!e) e = new Date(today.getFullYear(), today.getMonth() + 1, 0);
       if (s.getTime() > e.getTime()) {
         const t = s;
         s = e;
@@ -4821,6 +4859,140 @@
         endKey: fk(e),
         label: `${s.getMonth() + 1}月${s.getDate()}日 ~ ${e.getMonth() + 1}月${e.getDate()}日`,
       };
+    }
+
+    /* ============ 习惯自己的「查看窗口」============
+       背景：顶上那排段位（日 / 周 / 月 / 年 / 范围）原来只有一个，改一下所有习惯
+       都跟着变。但每个习惯想看的时段本来就不一样 —— 打卡想看「近 100 天」，
+       另一个只看「本月」。所以这里给**每个习惯**存一份自己的窗口。
+
+       两层分工（别搞混）：
+       - 顶部段位管**形态**（日卡 / 周条 / 月历 / 年热力 / 范围流式格），整屏一致；
+       - 这份窗口只管**范围模式下自己那一段**，没配过就用顶部那对全局日期。
+       所以配过窗口的习惯照样跟着段位换形态，切到月视图就是月视图。
+
+       存的是**预设名**（month / d7 / d100…）而不是死日期，所以「本月」到了
+       下个月自动就是新的一月；只有「自定义」才把起止日期落成字符串。 */
+
+    /* 预设名 → 具体起止（相对「今天」现算） */
+    _habitViewPresetRange(preset) {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const back = (n) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + n);
+        return d;
+      };
+      if (preset === "month") {
+        /* 一整月：月初到**月末**（不是到今天就截断）—— 看的是「这个月我坚持得
+           怎么样」，右边还能顺带看出这个月还剩几天。口径与顶部全局范围的默认值
+           完全一致，同一个「本月」在两处是同一个意思。
+           过完的日子照常上色；还没到的日子由 mkRange 挂 is-future 压淡。 */
+        return {
+          start: new Date(now.getFullYear(), now.getMonth(), 1),
+          end: new Date(now.getFullYear(), now.getMonth() + 1, 0),
+        };
+      }
+      if (preset === "prevMonth") {
+        const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return {
+          start: first,
+          end: new Date(first.getFullYear(), first.getMonth() + 1, 0),
+        };
+      }
+      if (preset === "d7") return { start: back(-6), end: today };
+      if (preset === "d30") return { start: back(-29), end: today };
+      if (preset === "d100") return { start: back(-99), end: today };
+      return null;
+    }
+
+    /* 某个习惯自己的查看窗口：{ preset, start, end, startKey, endKey, label }；
+       null = 跟随顶部。自定义的起止写反了自动对调（与全局范围同一套宽容度）。 */
+    _habitViewRange(type) {
+      const all =
+        this.data.habitViews && typeof this.data.habitViews === "object"
+          ? this.data.habitViews
+          : {};
+      const raw = all[type];
+      if (!raw || typeof raw !== "object") return null;
+      const mk = (s) => {
+        const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+      };
+      const fk = (d) =>
+        d.getFullYear() +
+        "-" +
+        String(d.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(d.getDate()).padStart(2, "0");
+      const preset = String(raw.preset || "");
+      let s;
+      let e;
+      let label;
+      if (preset === "custom") {
+        s = mk(raw.start);
+        e = mk(raw.end);
+        /* 只填了一头（还没选另一头）时按「跟随顶部」算，不画半个窗口 */
+        if (!s || !e) return null;
+        label = `${s.getMonth() + 1}月${s.getDate()}日 ~ ${e.getMonth() + 1}月${e.getDate()}日`;
+      } else {
+        const p = this._habitViewPresetRange(preset);
+        if (!p) return null;
+        s = p.start;
+        e = p.end;
+        label = HABIT_VIEW_LABEL[preset] || "自定义";
+      }
+      if (s.getTime() > e.getTime()) {
+        const t = s;
+        s = e;
+        e = t;
+      }
+      return {
+        preset,
+        start: s,
+        end: e,
+        startKey: fk(s),
+        endKey: fk(e),
+        label,
+      };
+    }
+
+    /* 写 / 清某个习惯的查看窗口。preset 为空 = 清掉这份记录，回到「跟随顶部」；
+       custom 要一并给 start / end（YYYY-MM-DD）。落盘走 _persist，
+       重启思源、重开插件都还在。 */
+    _habitSetView(type, preset, start, end) {
+      const all = Object.assign({}, this.data.habitViews || {});
+      if (!preset) delete all[type];
+      else if (preset === "custom") {
+        all[type] = {
+          preset: "custom",
+          start: String(start || ""),
+          end: String(end || ""),
+        };
+      } else all[type] = { preset };
+      this.data.habitViews = all;
+      this._persist("保存习惯查看窗口");
+    }
+
+    /* 某习惯在指定窗口里的每日表现：跨年窗口把涉及的那几年数据合起来。
+       _habitYearData 一次只给一年，而 _habitRowsByDate 已经按年做了缓存，
+       所以跨年最多多走一两次分组，不贵。合计（条数 / 时长）只数窗口内的日子 ——
+       卡片头上那行「N 条 · 共 X」说的就是「这一段里有多少」，与窗口对得上。 */
+    _habitRangeData(type, win) {
+      const days = {};
+      for (let y = win.start.getFullYear(); y <= win.end.getFullYear(); y++) {
+        Object.assign(days, this._habitYearData(type, y).days);
+      }
+      let totalCnt = 0;
+      let totalMin = 0;
+      const len = Math.round((win.end - win.start) / 86400000) + 1;
+      for (let i = 0; i < len; i++) {
+        const r = days[this._calKey(new Date(win.start.getTime() + i * 86400000))];
+        if (!r) continue;
+        totalCnt += r.cnt || 0;
+        totalMin += r.min || 0;
+      }
+      return { days, totalCnt, totalMin };
     }
 
     /* 一年的「日期 → 带时长的行」算一次缓存起来，几个习惯共用。
@@ -5181,7 +5353,10 @@
       };
 
       /* 周期段位行：与顶栏视图切换同一套段位样式（.north-caltab-segments）。
-         选「范围」时在右边补两个日期输入，改动即重绘（change 委托在容器上）。 */
+         选「范围」时在右边补两个日期输入，改动即重绘（change 委托在容器上）。
+         —— 这里**才是**决定看哪种形态的开关（日卡 / 周条 / 月历 / 年热力 / 范围流式格）。
+         习惯卡上那枚「查看窗口」只管范围模式下自己那一段，不抢这个开关的活。
+         （别在这行加 data-tip：提示气泡会压在段位上，把「周」这些按钮挡掉。） */
       const perBtn = (key, txt) =>
         `<button class="${period === key ? "active" : ""}" data-caltab-habitper="${key}">${txt}</button>`;
       let toolbarHtml = `<div class="north-caltab-habit-toolbar"><div class="north-caltab-segments north-caltab-habit-periods">${perBtn(
@@ -5191,32 +5366,38 @@
         "year",
         "年"
       )}${perBtn("range", "范围")}</div>`;
-      if (period === "range") {
-        /* 起止日期：两枚胶囊按钮 + 自绘日历弹层（替换原生 date 输入，
-           观感与插件其它浮层一致）。弹层一次只开一个字段，
-           浏览月份存在实例上（_calTabHabitRangeView）。 */
-        const rangeField = (which) => {
-          const d = which === "start" ? rangeWin.start : rangeWin.end;
-          const open = this._calTabHabitRangePick === which;
-          const wd = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
-          return `<button class="north-caltab-habit-rfield${
-            open ? " open" : ""
-          }" data-caltab-rangebtn="${which}" data-tip="选择${
-            which === "start" ? "开始" : "结束"
-          }日期">${d.getMonth() + 1}月${d.getDate()}日 周${wd}</button>`;
-        };
-        /* 日历弹层：月头（两侧圆头箭头 + 居中年月）+ 快捷项一排 +
-           星期行（按设置的每周起始日）+ 整月网格（前后月的日子浅灰补齐）。
-           选中日 = 主色实心，今天 = 主色字；点格即选并收起。 */
-        const rangeCal = (which) => {
-          if (this._calTabHabitRangePick !== which) return "";
-          const view =
+      /* 起止日期：两枚胶囊按钮 + 自绘日历弹层（替换原生 date 输入，
+         观感与插件其它浮层一致）。弹层一次只开一个字段，
+         浏览月份存在实例上（_calTabHabitRangeView）。
+         scope 为空 = 改顶部那对全局日期；否则是改某张习惯卡自己的窗口
+         —— 同一份日历两处共用，靠 _calTabHabitRangeScope 区分写入目标。 */
+      const rangeField = (which, win, scope) => {
+        const d = which === "start" ? win.start : win.end;
+        const open =
+          this._calTabHabitRangePick === which &&
+          (this._calTabHabitRangeScope || "") === scope;
+        const wd = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+        return `<button class="north-caltab-habit-rfield${
+          open ? " open" : ""
+        }" data-caltab-rangebtn="${which}" data-caltab-rangescope="${escapeHtml(
+          scope
+        )}" data-tip="选择${which === "start" ? "开始" : "结束"}日期">${
+          d.getMonth() + 1
+        }月${d.getDate()}日 周${wd}</button>`;
+      };
+      const rangeCal = (which, win, scope) => {
+        if (
+          this._calTabHabitRangePick !== which ||
+          (this._calTabHabitRangeScope || "") !== scope
+        )
+          return "";
+        const view =
             this._calTabHabitRangeView instanceof Date
               ? this._calTabHabitRangeView
               : new Date();
           const y = view.getFullYear();
           const m = view.getMonth();
-          const selKey = which === "start" ? rangeWin.startKey : rangeWin.endKey;
+          const selKey = which === "start" ? win.startKey : win.endKey;
           const ws = this._calWeekStart();
           const first = new Date(y, m, 1);
           const lead =
@@ -5256,14 +5437,79 @@
                     <div class="north-caltab-habit-rcal-week">${weekHead}</div>
                     <div class="north-caltab-habit-rcal-grid">${cells}</div>
                 </div>`;
-        };
+      };
+      if (period === "range") {
         toolbarHtml += `<div class="north-caltab-habit-range">${rangeField(
-          "start"
+          "start",
+          rangeWin,
+          ""
         )}<span class="north-caltab-habit-range-sep">至</span>${rangeField(
-          "end"
-        )}${rangeCal("start")}${rangeCal("end")}</div>`;
+          "end",
+          rangeWin,
+          ""
+        )}${rangeCal("start", rangeWin, "")}${rangeCal("end", rangeWin, "")}</div>`;
       }
       toolbarHtml += `</div>`;
+
+      /* 习惯卡上那枚「查看窗口」= 这个习惯在**范围模式**下看哪一段：
+         viewOf(type) → 它自己配的那一段（没配过 = null，用顶部那对全局日期）
+         段位（日 / 周 / 月 / 年 / 范围）始终由**顶部**统一驱动 —— 卡片不会因为
+         配过窗口就赖在范围样式上不走，切到月视图就是月视图。 */
+      const viewOf = (type) => this._habitViewRange(type);
+
+      /* 卡片头那枚「查看窗口」胶囊：点开在卡片里就地展开设置条（不做浮层 ——
+         卡片网格会裁掉溢出的东西）。没配过显示「默认」。 */
+      const viewChip = (type, vw) =>
+        `<button class="north-caltab-habit-period${
+          vw ? " is-set" : ""
+        }" type="button" data-caltab-habitview="${escapeHtml(
+          type
+        )}" data-tip="${
+          vw
+            ? "查看窗口：顶部选「范围」时只看这一段"
+            : "用顶部的全局范围，点开可单独设置"
+        }">${sicon("iconCalendar")}${escapeHtml(vw ? vw.label : "默认")}</button>`;
+
+      /* 查看窗口设置条：预设一眼全在；选「自定义」再补一对起止日期。
+         起止用的是顶部那套自绘日历（靠 _calTabHabitRangeScope 区分写入目标）。 */
+      const viewPanel = (type, vw) => {
+        if (this._calTabHabitViewOpen !== type) return "";
+        const raw = (this.data.habitViews && this.data.habitViews[type]) || {};
+        const cur = String(raw.preset || "");
+        /* 自定义的起止：还没落成有效窗口时先用「当前生效的那一段」兜底，
+           这样点开就看到眼下正在看的日子，而不是一对空白 */
+        const win = vw || this._habitRangeWindow();
+        const preBtn = (o) =>
+          `<button type="button" class="${
+            cur === o.value ? "on" : ""
+          }" data-caltab-habitvpreset="${
+            o.value
+          }" data-caltab-habitvtype="${escapeHtml(type)}">${o.label}</button>`;
+        const custom =
+          cur === "custom"
+            ? `<div class="north-caltab-habit-range">${rangeField(
+                "start",
+                win,
+                type
+              )}<span class="north-caltab-habit-range-sep">至</span>${rangeField(
+                "end",
+                win,
+                type
+              )}${rangeCal("start", win, type)}${rangeCal("end", win, type)}</div>`
+            : "";
+        return `<div class="north-caltab-habit-vpanel">
+                <span class="north-caltab-habit-vlabel">查看窗口</span>
+                <span class="north-caltab-habit-vpresets">${HABIT_VIEW_PRESETS.map(
+                  preBtn
+                ).join("")}</span>
+                <span class="north-caltab-habit-vnote">${
+                  period === "range"
+                    ? "只看这一段，别的习惯各看各的"
+                    : "顶部段位切到「范围」时生效"
+                }</span>
+                ${custom}
+            </div>`;
+      };
 
       if (!types.length) {
         return `<div class="north-caltab-habit">
@@ -5276,13 +5522,22 @@
       }
 
       let doneCount = 0;
-      const cardHtml = (type) => {
+      const cardHtml = (type, vw) => {
         const color = this._colorOf(type) || DEFAULT_TYPE_COLOR;
         /* 这个习惯自己的目标模型：单位 × 方向（好/坏）× 周期（日/周/月）× 目标值 */
         const cfg = this._habitConfig(type);
         /* 卡上显示的名字：配了别名就用别名（类型名是数据层的，改不得） */
         const label = cfg.alias || type;
-        const { days, totalCnt, totalMin } = this._habitYearData(type, year);
+        /* 形态由顶部段位定（p）。范围模式下这个习惯看哪一段：自己配过就用
+           自己那段（跨年的日子由 _habitRangeData 按年合并），没配过就用
+           顶部那对全局日期。配过窗口**不会**把卡片锁在范围样式上。 */
+        const p = period;
+        const win = p === "range" ? vw || rangeWin : null;
+        const vy = win ? win.end.getFullYear() : year;
+        const data = win
+          ? this._habitRangeData(type, win)
+          : this._habitYearData(type, year);
+        const { days, totalCnt, totalMin } = data;
         const dayVal = (d) => this._habitDayValue(days, this._calKey(d), cfg);
         /* 「浅档」覆盖（设置里按习惯选）：等级 1 格子的浓度内联加深，
            直接压过共用的 .tt-lv1 —— 只影响这个习惯，别的习惯照旧。
@@ -5339,25 +5594,26 @@
         /* —— 非年周期的格子区（年热力走下面原有的那段） ——
            周 / 月两个周期已改走外面的 weekCardHtml / mcardHtml（都是卡片），
            卡片本身只剩 范围 / 年热力 两种格子区（周 / 月 / 日都改走外面的卡片构建器）。 */
-        /* 范围：范围内每天一格流式铺开（跨年的日子取不到当年数据，按空格处理） */
-        const mkRange = () => {
-          const len = Math.round((rangeWin.end - rangeWin.start) / 86400000) + 1;
+        /* 范围：范围内每天一格流式铺开。跨年的窗口不再留空格 ——
+           数据在 _habitRangeData 里把涉及的那几年合起来了。 */
+        const mkRange = (w) => {
+          const len = Math.round((w.end - w.start) / 86400000) + 1;
           if (len <= 0 || len > 366)
             return `<div class="north-caltab-habit-rnote">范围无效（最长 366 天）</div>`;
           let cells = "";
           for (let i = 0; i < len; i++) {
-            const dt = new Date(rangeWin.start);
-            dt.setDate(rangeWin.start.getDate() + i);
-            if (dt.getFullYear() !== year) {
-              cells += `<div class="north-caltab-habit-rcell is-blank"></div>`;
-              continue;
-            }
+            const dt = new Date(w.start);
+            dt.setDate(w.start.getDate() + i);
             const info = cellInfo(dt);
             const valTxt =
               cfg.unit === "min" ? this._fmtStatsDur(info.v) : `${fmtN(info.v)}`;
             cells += `<div class="north-caltab-habit-rcell${
               info.lvl ? " tt-lv" + info.lvl : ""
-            }"${lv1Attr(info.lvl)} data-caltab-habitday="${info.key}" data-tip="${escapeHtml(
+            }${
+              dt > now ? " is-future" : ""
+            }"${lv1Attr(info.lvl)} data-caltab-habitday="${
+              info.key
+            }" data-tip="${escapeHtml(
               info.tip
             )}"><span class="north-caltab-habit-rcell-date">${dt.getMonth() + 1}/${
               dt.getDate()
@@ -5382,14 +5638,14 @@
             this._habitPeriodSum(
               days,
               cfg,
-              new Date(year, now.getMonth(), 1),
-              new Date(year, now.getMonth() + 1, 0).getDate()
+              new Date(vy, now.getMonth(), 1),
+              new Date(vy, now.getMonth() + 1, 0).getDate()
             )
           );
         }
         if (achieved) doneCount += 1;
-        const streak = this._habitStreak(days, year, cfg);
-        const longest = this._habitLongest(days, year, cfg);
+        const streak = this._habitStreak(days, vy, cfg);
+        const longest = this._habitLongest(days, vy, cfg);
         /* 「本期成绩」一行：日目标 → 本月达标天数 / 已过天数；
            周目标 → 本周累计 / 目标；月目标 → 本月累计 / 目标 */
         const fmtN = (n) => Math.round(n * 10) / 10;
@@ -5398,10 +5654,10 @@
         let statGoal = 0;
         let statSuffix = "";
         if (cfg.period === "day") {
-          const elapsed = year === now.getFullYear() ? now.getDate() : new Date(year, now.getMonth() + 1, 0).getDate();
+          const elapsed = vy === now.getFullYear() ? now.getDate() : new Date(vy, now.getMonth() + 1, 0).getDate();
           let mDone = 0;
           for (let d = 1; d <= elapsed; d++) {
-            if (this._habitPeriodAchieved(cfg, dayVal(new Date(year, now.getMonth(), d)))) mDone += 1;
+            if (this._habitPeriodAchieved(cfg, dayVal(new Date(vy, now.getMonth(), d)))) mDone += 1;
           }
           statDone = mDone;
           statGoal = elapsed;
@@ -5415,8 +5671,8 @@
           statDone = this._habitPeriodSum(
             days,
             cfg,
-            new Date(year, now.getMonth(), 1),
-            new Date(year, now.getMonth() + 1, 0).getDate()
+            new Date(vy, now.getMonth(), 1),
+            new Date(vy, now.getMonth() + 1, 0).getDate()
           );
           statGoal = cfg.goal;
           statSuffix = cfg.goalUnit === "days" ? " 天" : "";
@@ -5424,16 +5680,16 @@
         /* 格子区按周期分发：年 = 下面这段整年热力（原样保留），
            其余周期用上面几个构建器换成对应窗口的展示 */
         let heatHtml = "";
-        if (period === "year") {
+        if (p === "year") {
         /* 年格子：一整年铺成「列＝周、行＝星期日→六」，月份标在下方 ——
            版式与尺寸照抄统计视图那张「全年记录热力」（1:1 复刻 lumina 贡献图），
            只是配色换成这个习惯的类型色。年外的日子留空（透明，不占视觉）。 */
-        const yearStart = new Date(year, 0, 1);
+        const yearStart = new Date(vy, 0, 1);
         const gridStart = new Date(yearStart);
         /* 周日起始，与统计那张热力取周方式一致 */
         gridStart.setDate(yearStart.getDate() - yearStart.getDay());
         const weeks = Math.ceil(
-          (Math.round((new Date(year, 11, 31) - gridStart) / 86400000) + 1) / 7
+          (Math.round((new Date(vy, 11, 31) - gridStart) / 86400000) + 1) / 7
         );
         const monthStart = new Array(12).fill(-1);
         const monthEnd = new Array(12).fill(-1);
@@ -5447,7 +5703,7 @@
           for (let d = 0; d < 7; d++) {
             const dt = new Date(gridStart);
             dt.setDate(gridStart.getDate() + w * 7 + d);
-            if (dt.getFullYear() !== year) {
+            if (dt.getFullYear() !== vy) {
               col += '<i class="north-caltab-habit-cell is-blank"></i>';
               continue;
             }
@@ -5510,8 +5766,8 @@
                     <div class="north-caltab-habit-heatcols">${heatCols}</div>
                     <div class="north-caltab-habit-heatmonths">${heatMonths}</div>
                 </div>`;
-        } else if (period === "range") {
-          heatHtml = mkRange();
+        } else if (p === "range") {
+          heatHtml = mkRange(win);
         }
         /* 等级说明按目标模型生成（色块用该习惯的类型色 --tt-c）：
            日目标（好）：等级k ≥ k×目标；日目标（坏）：达标 < 目标（不上色），等级k = 超标 k 倍起；
@@ -5559,7 +5815,7 @@
            本周 / 本月各一行（药丸标签 + 数值加粗，负完成率标红）。
            只在今年显示。 */
         let pstatTip = "";
-        if (year === now.getFullYear()) {
+        if (vy === now.getFullYear()) {
           const line = (label, s) => {
             const avg = s.days > 0 ? s.total / s.days : 0;
             const total =
@@ -5580,11 +5836,11 @@
             7,
             now
           );
-          const mLen = new Date(year, now.getMonth() + 1, 0).getDate();
+          const mLen = new Date(vy, now.getMonth() + 1, 0).getDate();
           const mS = this._habitPeriodStats(
             days,
             cfg,
-            new Date(year, now.getMonth(), 1),
+            new Date(vy, now.getMonth(), 1),
             mLen,
             now
           );
@@ -5594,7 +5850,9 @@
                 <div class="north-caltab-habit-head">
                     <span class="north-caltab-habit-name"><i class="north-caltab-habit-dot"></i>${escapeHtml(
                       label
-                    )}<span class="north-caltab-habit-goal">${habitGoalText(cfg)}</span></span>
+                    )}<span class="north-caltab-habit-goal">${habitGoalText(
+          cfg
+        )}</span>${viewChip(type, vw)}</span>
                     <span class="north-caltab-habit-stats">
                         <span>${sicon("iconPlugZap")}连续 <b>${streak.n}</b> ${streak.unit}</span>
                         <span>${sicon("iconStar")}最长 <b>${longest.n}</b> ${longest.unit}</span>
@@ -5608,9 +5866,10 @@
         )}</b></span>
                     </span>
                 </div>
+                ${viewPanel(type, vw)}
                 <div class="north-caltab-habit-heat">${heatHtml}</div>
                 ${
-                  period === "year" || period === "range"
+                  p === "year" || p === "range"
                     ? `<div class="north-caltab-habit-legend">${legend}</div>`
                     : ""
                 }
@@ -5687,7 +5946,8 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${viewChip(type, viewOf(type))}</div>
+                ${viewPanel(type, viewOf(type))}
                 <div class="north-caltab-habit-weekrow">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -5746,7 +6006,8 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${viewChip(type, viewOf(type))}</div>
+                ${viewPanel(type, viewOf(type))}
                 <div class="north-caltab-habit-mcal">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -5785,7 +6046,8 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${viewChip(type, viewOf(type))}</div>
+                ${viewPanel(type, viewOf(type))}
                 <div class="north-caltab-habit-dmain"><b class="north-caltab-habit-dval">${valTxt}</b><span class="north-caltab-habit-dbadge ${
                   ok ? "ok" : "no"
                 }">${badge}</span></div>
@@ -5801,7 +6063,9 @@
       };
 
       /* 周 / 月 / 日下习惯条目换皮，年 / 范围仍走 cardHtml；
-         三种周期都是卡片网格，分组节内同样生效。 */
+         三种周期都是卡片网格，分组节内同样生效。
+         形态只看**顶部段位**（这是「看哪种」的开关），所以整屏一定是一致的；
+         各习惯自己的「查看窗口」只在范围模式下换掉那一段的日子。 */
       const itemsHtml = (list) => {
         if (period === "week")
           return `<div class="north-caltab-habit-mcards">${list
@@ -5815,7 +6079,7 @@
           return `<div class="north-caltab-habit-mcards">${list
             .map(dayCardHtml)
             .join("")}</div>`;
-        return list.map(cardHtml).join("");
+        return list.map((t) => cardHtml(t, viewOf(t))).join("");
       };
 
       /* 分组分节：**至少有一个习惯真正进了分组**才启用分节展示 ——
@@ -7285,18 +7549,29 @@
         }
 
         /* —— 习惯「范围」的自绘日历：开合字段 / 翻月 / 选日期。
-           选中即写入插件数据 data.habitRange[start|end]（落盘持久）并收起；
-           起止写反了也没关系，_habitRangeWindow 会自动对调。 —— */
+           同一份日历两处共用：
+           scope 为空 → 顶部那对全局日期（data.habitRange[start|end]）；
+           scope = 习惯名 → 那张习惯卡自己的查看窗口。
+           起止写反了也没关系，两边都会自动对调。 —— */
         const rangeBtn =
           e.target.closest && e.target.closest("[data-caltab-rangebtn]");
         if (rangeBtn) {
           const which = rangeBtn.dataset.caltabRangebtn || "start";
-          this._calTabHabitRangePick =
-            this._calTabHabitRangePick === which ? "" : which;
-          if (this._calTabHabitRangePick) {
+          const scope = rangeBtn.dataset.caltabRangescope || "";
+          const same =
+            this._calTabHabitRangePick === which &&
+            (this._calTabHabitRangeScope || "") === scope;
+          if (same) {
+            this._calTabHabitRangePick = "";
+            this._calTabHabitRangeScope = "";
+          } else {
+            this._calTabHabitRangePick = which;
+            this._calTabHabitRangeScope = scope;
             /* 打开时让弹层先停在所选字段当前的那个月 */
-            const win = this._habitRangeWindow();
-            const d = this._calTabHabitRangePick === "start" ? win.start : win.end;
+            const win = scope
+              ? this._habitViewRange(scope) || this._habitRangeWindow()
+              : this._habitRangeWindow();
+            const d = which === "start" ? win.start : win.end;
             this._calTabHabitRangeView = new Date(
               d.getFullYear(),
               d.getMonth(),
@@ -7327,14 +7602,29 @@
         if (rangePick) {
           const key = rangePick.dataset.caltabRangepick || "";
           if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
-            /* 范围落盘：存进插件数据，重启思源后再次进范围还是这一段 */
             const which = this._calTabHabitRangePick || "start";
-            const next = Object.assign({}, this.data.habitRange || {});
-            next[which] = key;
-            this.data.habitRange = next;
-            this._persist("保存习惯范围");
+            const scope = this._calTabHabitRangeScope || "";
+            if (scope) {
+              /* 写进这张习惯卡自己的窗口：另一头保持原样（还没有就用当前
+                 生效的那一段补上），所以先点哪个字段都行 */
+              const w =
+                this._habitViewRange(scope) || this._habitRangeWindow();
+              this._habitSetView(
+                scope,
+                "custom",
+                which === "start" ? key : w.startKey,
+                which === "end" ? key : w.endKey
+              );
+            } else {
+              /* 全局范围落盘：重启思源后再次进范围还是这一段 */
+              const next = Object.assign({}, this.data.habitRange || {});
+              next[which] = key;
+              this.data.habitRange = next;
+              this._persist("保存习惯范围");
+            }
           }
           this._calTabHabitRangePick = "";
+          this._calTabHabitRangeScope = "";
           this._paintCalendarTab(container);
           return;
         }
@@ -7419,9 +7709,51 @@
           this._paintCalendarTab(container);
           return;
         }
+        /* 习惯卡上的「查看窗口」胶囊：就地展开 / 收起设置条。不做浮层，
+           重绘后靠 _calTabHabitViewOpen 恢复。 */
+        const habitViewBtn =
+          e.target.closest && e.target.closest("[data-caltab-habitview]");
+        if (habitViewBtn) {
+          const t = habitViewBtn.dataset.caltabHabitview || "";
+          this._calTabHabitViewOpen = this._calTabHabitViewOpen === t ? "" : t;
+          this._calTabHabitRangePick = "";
+          this._calTabHabitRangeScope = "";
+          this._paintCalendarTab(container);
+          return;
+        }
+        /* 查看窗口的快捷预设：「跟随顶部」= 清掉这个习惯的窗口（回到默认视角）；
+           「自定义」= 以当前正在看的那一段为起点，再用两枚日期字段微调。 */
+        const habitViewPre =
+          e.target.closest && e.target.closest("[data-caltab-habitvpreset]");
+        if (habitViewPre) {
+          const t = habitViewPre.dataset.caltabHabitvtype || "";
+          const p = habitViewPre.dataset.caltabHabitvpreset || "";
+          if (t) {
+            if (p === "custom") {
+              const w = this._habitViewRange(t) || this._habitRangeWindow();
+              this._habitSetView(t, "custom", w.startKey, w.endKey);
+              this._calTabHabitViewOpen = t;
+            } else {
+              this._habitSetView(t, p);
+              this._calTabHabitViewOpen = "";
+            }
+            /* 「查看窗口」只在范围模式下看得见，所以设完顺手把段位切过去 ——
+               不然在年 / 月视图里点了「近 100 天」，屏幕上一点变化都没有，
+               看着像没生效。选「跟随顶部」（p 为空）只是清掉配置，不动段位。 */
+            if (p && (this._calTabHabitPeriod || "year") !== "range") {
+              this._calTabHabitPeriod = "range";
+              this._calTabHabitAnchor = new Date();
+            }
+          }
+          this._calTabHabitRangePick = "";
+          this._calTabHabitRangeScope = "";
+          this._paintCalendarTab(container);
+          return;
+        }
         /* 习惯视图：周期段位切换（日 / 周 / 月 / 年 / 范围）。
            切换时锚点回到今天（月视图锚到 1 号，避免 setMonth 溢出到下个月）。
-           范围的起止日期已落盘持久 —— 切走再切回范围，还是上次选的那一段。 */
+           范围的起止日期已落盘持久 —— 切走再切回范围，还是上次选的那一段。
+           注意这是**默认视角**：单独配过查看窗口的习惯不跟着它动。 */
         const habitPerBtn =
           e.target.closest && e.target.closest("[data-caltab-habitper]");
         if (habitPerBtn) {
@@ -7486,10 +7818,15 @@
               this._paintCalendarTab(container);
               return;
             }
-            /* 习惯视图的「今天」：锚点回到今天；范围模式清掉已存的窗口
-               （落盘恢复默认 —— 下次进范围也是默认的「本月 1 号至今」） */
+            /* 习惯视图的「今天」：锚点回到今天；范围模式清掉顶部那对全局日期
+               （落盘恢复默认 —— 下次进范围也是默认的「本月 1 号 ~ 月末」）。
+               单独配过「查看窗口」的习惯看的是自己那一段，不受影响，要改就在
+               它卡上那枚胶囊里改。顺便收起设置条。 */
             if (this._calTabView === "habit") {
               this._calTabHabitAnchor = new Date();
+              this._calTabHabitViewOpen = "";
+              this._calTabHabitRangePick = "";
+              this._calTabHabitRangeScope = "";
               if ((this._calTabHabitPeriod || "year") === "range") {
                 this.data.habitRange = null;
                 this._persist("重置习惯范围");
@@ -7533,18 +7870,51 @@
             else if (p === "month") a.setMonth(a.getMonth() + dir);
             else if (p === "year") a.setFullYear(a.getFullYear() + dir);
             else {
-              /* 范围模式：把整段窗口往前 / 往后挪自己的长度（同样落盘） */
-              const rw = this._habitRangeWindow();
-              const len = Math.round((rw.end - rw.start) / 86400000) + 1;
+              /* 范围模式：整段窗口往前 / 往后挪一段（落盘）。
+                 顺手把各习惯**自定义**的窗口也按各自的长度一起平移 ——
+                 不然按一下「下一段」，只有用「默认」的习惯动了、配过窗口的
+                 原地不动，看着就像坏了。预设（本月 / 近 N 天）锚定的是「今天」，
+                 本来就不该跟着时间轴跑，所以不参与平移。 */
               const fk = (d) =>
                 d.getFullYear() +
                 "-" +
                 String(d.getMonth() + 1).padStart(2, "0") +
                 "-" +
                 String(d.getDate()).padStart(2, "0");
-              const s2 = new Date(rw.start.getTime() + len * dir * 86400000);
-              const e2 = new Date(rw.end.getTime() + len * dir * 86400000);
-              this.data.habitRange = { start: fk(s2), end: fk(e2) };
+              /* 整月窗口（几月 1 号到那月月末）按月翻，翻出来还是整月 ——
+                 按月长平移的话 9/1~9/30 会翻成 10/1~10/30，看着不像「下一个月」。
+                 其它窗口（自定义的任意区间）就按自己的天数整段平移。 */
+              const shiftWin = (s, e) => {
+                const lastDay = new Date(
+                  e.getFullYear(),
+                  e.getMonth() + 1,
+                  0
+                ).getDate();
+                if (s.getDate() === 1 && e.getDate() === lastDay) {
+                  return {
+                    start: fk(new Date(s.getFullYear(), s.getMonth() + dir, 1)),
+                    end: fk(new Date(s.getFullYear(), s.getMonth() + dir + 1, 0)),
+                  };
+                }
+                const len = Math.round((e - s) / 86400000) + 1;
+                return {
+                  start: fk(new Date(s.getTime() + len * dir * 86400000)),
+                  end: fk(new Date(e.getTime() + len * dir * 86400000)),
+                };
+              };
+              const rw = this._habitRangeWindow();
+              this.data.habitRange = shiftWin(rw.start, rw.end);
+              const all = Object.assign({}, this.data.habitViews || {});
+              let moved = false;
+              Object.keys(all).forEach((t) => {
+                const raw = all[t];
+                if (!raw || raw.preset !== "custom") return;
+                const w = this._habitViewRange(t);
+                if (!w) return;
+                all[t] = Object.assign({}, raw, shiftWin(w.start, w.end));
+                moved = true;
+              });
+              if (moved) this.data.habitViews = all;
               this._persist("保存习惯范围");
             }
             this._calTabHabitAnchor = a;
@@ -8896,7 +9266,7 @@
       p.classList.add("tt-hit");
     }
 
-    /* 当前生效的下划线线宽（px），默认 0.75 */
+    /* 当前生效的下划线线宽（px），默认 0.75；0 = 无（不画线） */
     _lineWidth() {
       return normLineWidth(this.data && this.data.markLineWidth);
     }
@@ -8929,9 +9299,15 @@
       const attr = this._attr("type");
       const seen = new Set();
       const bg = this._bgOpacity();
+      const lineW = this._lineWidth();
+      /* 线宽选「无」时，线色直接给 transparent —— 内阴影即使宽度为 0 也仍然
+         声明着，压成透明最稳，不依赖浏览器怎么处理 0 尺寸的内阴影。 */
+      const noLine = !(lineW > 0);
       const rules = [
         /* 线宽、线色与底色由设置里的「下划线粗细」「记录底色」决定；
-           底色档位为 0（关闭）时输出 transparent，等价于不上底色，底边线不受影响。
+           底色档位为 0（关闭）时输出 transparent，等价于不上底色，底边线不受影响；
+           线宽为「无」时线色压成 transparent，标记本身照旧（属性不删、底色照上，
+           各视图也不受影响）—— 与别的插件同开时不会再叠出一条粗线。
            选择器同时覆盖两种情况：
            1) .tt-hit —— JS 即时打标，用于「刚输入、块属性还没写进库」的那一瞬间；
            2) 带记录类型属性的段落 —— 思源渲染文档时属性就已经在 DOM 上了，
@@ -8941,8 +9317,12 @@
         [
           `.protyle-wysiwyg [data-type="NodeParagraph"].tt-hit,`,
           `.protyle-wysiwyg [data-type="NodeParagraph"][${attr}]:not(.tt-nomark) {`,
-          `  --tt-line-w: ${this._lineWidth()}px;`,
-          `  --tt-line: color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${MARK_LINE_MIX}%, transparent);`,
+          `  --tt-line-w: ${noLine ? 0 : lineW}px;`,
+          `  --tt-line: ${
+            noLine
+              ? "transparent"
+              : `color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${MARK_LINE_MIX}%, transparent)`
+          };`,
           `  --tt-bg: ${
             bg > 0
               ? `color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${bg}%, transparent)`

@@ -1461,7 +1461,8 @@
      · [custom-…-type]    属性已在 DOM 上，靠它让下划线与文字同时出现，
                           不必等异步扫描补标（否则刷新后会先有字、过一会儿才浮出线）。
    范围外的段落由 JS 挂 .tt-nomark 压掉，属性不删。
-   变量都由设置驱动：--tt-c 来自块属性与类型配色，--tt-line-w 来自「下划线粗细」，
+   变量都由设置驱动：--tt-c 来自块属性与类型配色，--tt-line-w 来自「下划线粗细」
+   （选「无」时输出 0 并把 --tt-line 压成 transparent，等于只留底色不画线），
    --tt-line 与 --tt-bg 是同一类型色的深浅两档，线色深、底色浅；
    兜底色 #888888 与 index.js 的 DEFAULT_TYPE_COLOR 对应（类型管理里删掉的类型，
    文档里留下的历史记录会落到这个中性灰，而不是思源主题主色）。
@@ -3798,6 +3799,89 @@
   line-height: 1.7;
   white-space: nowrap;
 }
+/* 习惯卡上的「查看窗口」胶囊：**只影响这一个习惯**，点开在卡片里就地展开设置条。
+   没配过 = 「跟随顶部」，用中性灰底不抢眼；配过了用类型色淡底，
+   一眼就能看出这个习惯看的是自己那一段。 */
+.north-caltab-habit-period {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.8;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.north-caltab-habit-period:hover {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 12%, transparent);
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-habit-period.is-set {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 12%, transparent);
+  color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 70%, var(--b3-theme-on-surface));
+  font-weight: 600;
+}
+.north-caltab-habit-period .north-caltab-habit-sicon {
+  margin-right: 3px;
+  margin-left: -1px;
+}
+/* 查看窗口设置条：就地展开在卡片头下（不做浮层 —— 卡片网格会裁掉溢出的东西）。
+   一排预设 +（选了「自定义」时）一对起止日期，窄卡片里自动换行。 */
+.north-caltab-habit-vpanel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-habit-vlabel {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-habit-vpresets {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.north-caltab-habit-vpresets button {
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 7px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface-light);
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.north-caltab-habit-vpresets button:hover {
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-habit-vpresets button.on {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 14%, transparent);
+  color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 72%, var(--b3-theme-on-surface));
+  font-weight: 600;
+}
+/* 设置条尾巴上的说明：这段窗口只在顶部段位选「范围」时才看得出来 */
+.north-caltab-habit-vnote {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
 /* 类型色的小方块，与表格视图类型胶囊同源（都是 --tt-c） */
 .north-caltab-habit-dot {
   width: 8px;
@@ -4234,6 +4318,11 @@
 }
 .north-caltab-habit-rcell.is-blank {
   background: transparent;
+}
+/* 窗口尾端落在未来（「本月」铺到月末，后半月都还没到）：那些日子压淡一半，
+   一眼看出是「还没到」而不是「那天没记录」，同时整月的格子还是齐的。 */
+.north-caltab-habit-rcell.is-future {
+  opacity: 0.5;
 }
 .north-caltab-habit-rcell-date {
   font-size: 10px;
