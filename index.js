@@ -138,7 +138,8 @@
      MIN_BLOCK 是块的最小高度，避免极短的活动被压成一条看不见的线。
      SHOW_TIME 是「放得下两行」的高度门槛 —— 低于它就改成标题与时间同一行，
      硬塞两行会被裁掉半行，比挤一行更难看。
-     DEFAULT_MIN 给当天最后一条用：它没有下一条可参照，只能按默认时长摆一块。 */
+     DEFAULT_MIN 给「没有参照」的那一条用（结束模式的当天首条、开始模式的当天末条）：
+     它没有相邻记录可推算，只能按这个默认跨度摆一块，且不计入时长统计。 */
   const WEEK_HOUR_H = 40;
   const WEEK_MIN_BLOCK_H = 22;
   const WEEK_SHOWTIME_H = 36;
@@ -240,10 +241,19 @@
       : DEFAULT_RECORD_SCOPE;
 
   /* ---- 时间计算模式 ----
-     决定 Dock 时间线里每条记录的区间与「持续」怎么算：
-     end   —— 结束模式（默认）：节点时间为结束时间，时长从同日上一条结束算到当前结束；
-     start —— 开始模式：节点时间为开始时间，时长从当前开始算到下一条开始，
-              下一条在次日时按天拆分（当天算到 24:00，余下一段挂到次日开头）。 */
+     决定一条记录里那个时间点怎么解释，全部视图共用同一套口径：
+     Dock 时间线、日历时间轴的块位置、表格的起止与时长、统计的类型用时，
+     都按这里选的模式算 —— 换模式只改解释方式，不改任何已存的数据。
+     end   —— 结束模式（默认）：节点时间为结束时间，区间从同日上一条算到当前；
+     start —— 开始模式：节点时间为开始时间，区间从当前算到下一条。
+     两头没有参照的那一条（结束模式的当天首条、开始模式的当天末条）不编区间、
+     也不计入时长 —— 只显示节点时间本身，宁可不计也不编一个 30 分钟出来；
+     Dock 时间线在开始模式下会跨天拆段
+     （当天算到 24:00，余下一段挂到次日开头）。
+     记录的时间写成「08:30 - 09:30」这种显式区间时，无论选哪个模式都直接采用，
+     不再按模式推 —— 用户自己写明的起止优先。
+     注：结束模式在**日历的日视图里按天各算各的**，不跨天接前一天那条，
+     否则一条隔夜记录会横跨整整一晚，撑出一个没有数据的长块。 */
   const DEFAULT_TIME_MODE = "end";
   const TIME_MODE_OPTIONS = [
     { value: "end", label: "结束模式" },
@@ -1104,7 +1114,7 @@
         this._buildRow({
           title: "时间计算模式",
           desc:
-            "结束模式（默认）：节点时间为结束时间，时长从上一条结束算到当前结束。\n开始模式：节点时间为开始时间，时长从当前开始算到下一条开始。跨天时自动按天拆分。",
+            "节点时间代表开始还是结束，时间轴、表格与统计都按它算。\n结束模式（默认）算上一条到当前，开始模式算当前到下一条。",
           controlType: "select",
           options: TIME_MODE_OPTIONS,
           value: this._timeCalcMode(),
@@ -1113,8 +1123,13 @@
             if (this.data.timeCalcMode === mode) return;
             this.data.timeCalcMode = mode;
             this._persist("保存时间计算模式");
-            /* 区间与「持续」在渲染时现算：用缓存里的记录直接重绘即可 */
+            /* 区间与「持续」在渲染时现算，用缓存里的记录直接重绘即可。
+               两个入口都要刷：Dock 时间轴，以及主区域的日历标签页
+               （时间轴块 / 表格 / 统计 / 习惯都用同一份口径）。
+               Dock 那条路里虽然也顺手刷了日历，但 Dock 没打开时它会直接返回，
+               所以这里必须自己再调一次，否则改完设置当场看不到变化。 */
             this._refreshLifeLogDockContent();
+            this._refreshCalendarTabs();
             const label =
               (TIME_MODE_OPTIONS.find((o) => o.value === mode) || {}).label || mode;
             showMessage(`${NAME}：时间计算模式已改为「${label}」`);
@@ -2594,7 +2609,9 @@
       `;
       const groupsEl = wrap.querySelector(".tt-types__groups");
 
-      /* 让 input 宽度跟随文字长度，避免空白过长 */
+      /* 给 input 按字数设一个 size。宽度现在由样式表的网格布局接管
+         （名字框 flex 撑满芯片中间那段、长了截成省略号），
+         size 只影响「还没套上样式」的那一瞬，留着免得挤成一条。 */
       const fitInput = (input, min = 2) => {
         input.size = Math.max(min, (input.value || "").length);
       };
@@ -3651,9 +3668,11 @@
      * 数据 = 当前数据源 + 当前类型筛选，与其它视图同一份口径；
      * 点柱子跳到对应的天 / 月视图。
      * ============================================================ */
-    /* 按类型累计「时长(分钟)」与「条数」。时长规则与日历时间轴一致：
-       同一天里从本条记到下一条开始，显式区间优先，
-       当天最后一条补默认 30 分钟，不跨天；时间解析不出的记录不计。 */
+    /* 按类型累计「时长(分钟)」与「条数」。时长口径与时间轴 / 表格同源
+       （_resolveDayRanges，跟着「时间计算模式」走）：按天分组后，
+       结束模式算「上一条 → 本条」，开始模式算「本条 → 下一条开始」；
+       当天没有参照的那条按最小跨度计；显式区间优先；不跨天；
+       时间解析不出的记录不计，没有类型的不累计。 */
     _statsTypeDurations(records) {
       const minutes = new Map();
       const counts = new Map();
@@ -3663,20 +3682,16 @@
         const range = this._parseTimeRange(r.time);
         if (!range) return;
         if (!byDay.has(r.date)) byDay.set(r.date, []);
-        byDay
-          .get(r.date)
-          .push({ type: (r.type || "").trim(), start: range.start, end: range.end });
+        byDay.get(r.date).push({ rec: r, range });
       });
       byDay.forEach((list) => {
-        list.sort((a, b) => a.start - b.start);
+        list.sort((a, b) => a.range.start - b.range.start);
+        const ranges = this._resolveDayRanges(list);
         list.forEach((x, i) => {
-          const next = list[i + 1];
-          let endMin =
-            x.end !== null ? x.end : next ? next.start : x.start + WEEK_DEFAULT_MIN;
-          if (endMin <= x.start) endMin = x.start + 1;
-          if (!x.type) return;
-          minutes.set(x.type, (minutes.get(x.type) || 0) + (endMin - x.start));
-          counts.set(x.type, (counts.get(x.type) || 0) + 1);
+          const type = (x.rec.type || "").trim();
+          if (!type) return;
+          minutes.set(type, (minutes.get(type) || 0) + ranges[i].dur);
+          counts.set(type, (counts.get(type) || 0) + 1);
         });
       });
       return { minutes, counts };
@@ -4216,7 +4231,7 @@
         </div>`;
     }
     /* 时间轴视图（周 / 三日 / 日）摆块的三步走：
-       ① _parseCalTimelineRecords —— 解析并按开始时间排序；
+       ① _parseCalTimelineRecords —— 解析、排序，并按当前时间计算模式算出真实起止；
        ② _calTimelineLayout —— 按各天记录估出「弹性小时高」：本插件偏记录，
           密集时段几分钟一条，块又保底 22px 高，固定 40px/小时必然叠字。
           哪个小时装不下就把那个小时撑高（全部列共享一套小时高，刻度列的
@@ -4224,29 +4239,56 @@
        ③ _buildCalendarTimelineEvents —— 块按时间比例定位，但与上一块
           贴上时只后退到刚好不叠的位置：拥挤的记录上下排开，永不互相压字。 */
 
-    /* 解析一天的记录为 {record, range} 并按开始时间升序，时间非法的丢弃 */
+    /* 给「同一天」的记录按当前时间计算模式算出真实起止（分钟）。
+       入参 sorted 必须是已按时间升序的 [{ rec, range }]，range 来自 _parseTimeRange。
+       返回等长的 [{ start, end, hasRange, dur }]：
+         hasRange false —— 当天首条（结束模式）/ 末条（开始模式）没有参照，
+                           起止只用来给块一个最小高度，文案不写成区间；
+         dur            —— 真正计入时长口径的分钟数，hasRange false 时为 0：
+                           首末条本来就不知道它持续了多久，宁可不计，
+                           也不编一个 30 分钟进去 —— 编出来的数字会顺着
+                           链条污染下一条的起点，跟 Dock 时间线的口径就岔开了。
+       参照的那条一律取它的**节点时间**（range.start），不取它算出来的起止 ——
+       记录自己写明区间（08:30 - 09:30）时，无论选哪个模式都直接采用，不再按模式推。 */
+    _resolveDayRanges(sorted) {
+      const mode = this._timeCalcMode();
+      return sorted.map((x, i) => {
+        const anchor = x.range.start;
+        const explicitEnd = x.range.end;
+        /* 自己写明的区间：任何模式下都照用 */
+        if (explicitEnd !== null) {
+          return { start: anchor, end: explicitEnd, hasRange: true, dur: explicitEnd - anchor };
+        }
+        /* 开始模式看下一条，结束模式看上一条；两头都没有就看天 */
+        const ref = mode === "start" ? sorted[i + 1] : sorted[i - 1];
+        if (!ref) {
+          return {
+            start: anchor,
+            end: anchor + WEEK_DEFAULT_MIN,
+            hasRange: false,
+            dur: 0,
+          };
+        }
+        const start = mode === "start" ? anchor : ref.range.start;
+        let end = mode === "start" ? ref.range.start : anchor;
+        /* 起点被写死的区间顶到后面时（如 08:00 - 11:00 之后又记了 10:00），
+           给 1 分钟跨度让块站得住；节点时间本身永远不动 */
+        if (end <= start) end = start + 1;
+        return { start, end, hasRange: true, dur: end - start };
+      });
+    }
+
+    /* 解析一天的记录为 { record, range, start, end, hasRange, dur }，时间非法的丢弃。
+       start / end 是展示与摆块真正用的起止，dur 是计入时长口径的分钟数
+       （三者都由 _resolveDayRanges 按「时间计算模式」算出）；
+       range.start 始终是记录里那个节点时间本身，只写节点时间时用它。 */
     _parseCalTimelineRecords(records) {
-      return (records || [])
+      const list = (records || [])
         .map((r) => ({ record: r, range: this._parseTimeRange(r.time) }))
         .filter((x) => x.range)
         .sort((a, b) => a.range.start - b.range.start);
-    }
-
-    /* 第 i 条记录的结束分钟：显式区间 > 下一条开始 > 默认 30 分钟。
-       结束不晚于开始时补 1 分钟，保证块至少有个高度可算。 */
-    _calTimelineEndMin(parsed, i) {
-      const x = parsed[i];
-      const next = parsed[i + 1];
-      const explicitEnd = x.range.end;
-      const nextStart = next ? next.range.start : null;
-      let end =
-        explicitEnd !== null
-          ? explicitEnd
-          : nextStart !== null
-          ? nextStart
-          : x.range.start + WEEK_DEFAULT_MIN;
-      if (end <= x.range.start) end = x.range.start + 1;
-      return { end, explicitEnd, nextStart };
+      const ranges = this._resolveDayRanges(list);
+      return list.map((x, i) => Object.assign({}, x, ranges[i]));
     }
 
     /* 估各小时需要多高，两路一起算，取大者：
@@ -4261,17 +4303,16 @@
         if (!parsed.length) return;
         const byHour = new Map();
         let prevBottom = -WEEK_EVENT_GAP;
-        parsed.forEach((x, i) => {
-          const { end } = this._calTimelineEndMin(parsed, i);
+        parsed.forEach((x) => {
           const top = Math.max(
-            (x.range.start / 60) * WEEK_HOUR_H,
+            (x.start / 60) * WEEK_HOUR_H,
             prevBottom + WEEK_EVENT_GAP
           );
           const bottom =
             top +
             Math.max(
               WEEK_MIN_BLOCK_H,
-              ((end - x.range.start) / 60) * WEEK_HOUR_H
+              ((x.end - x.start) / 60) * WEEK_HOUR_H
             );
           prevBottom = bottom;
           const hb = Math.max(
@@ -4279,9 +4320,9 @@
             Math.min(23, Math.floor((bottom - 0.01) / WEEK_HOUR_H))
           );
           need[hb] = Math.max(need[hb], bottom - hb * WEEK_HOUR_H);
-          const h = Math.floor(x.range.start / 60);
+          const h = Math.max(0, Math.min(23, Math.floor(x.start / 60)));
           if (!byHour.has(h)) byHour.set(h, []);
-          byHour.get(h).push(x.range.start);
+          byHour.get(h).push(x.start);
         });
         /* 只有同一小时里起始 ≥ 2 条才可能互相挤：单条记录的溢出交给 ① 兜，
            不然随手记的半点记录也会把所在小时撑高，稀疏日就跟旧版长得不一样了 */
@@ -4306,9 +4347,11 @@
     }
 
     /* 把一天的记录换算成时间轴上的块，返回 HTML 字符串数组。
-       块高固定取到「下一条记录」为止（这是摆块的几何规则，不随「时间计算模式」变 ——
-       Dock 时间线的「持续」才跟模式走），当天最后一条没有下一条可参照，
-       就只显示起始时间、给一个最小高度（那段时间本来就没有数据）。
+       块的起止直接取 _resolveDayRanges 按「时间计算模式」算出的 start / end ——
+       结束模式下块从当天上一条延伸到本条，开始模式下从本条延伸到下一条，
+       块在图上的位置本身就表达了这个模式。
+       两头没有参照的那条（hasRange 为 false）只有节点时间可写，
+       给一个最小高度（那段时间本来就没有数据）。
        top / height 在 JS 里算好写进 style：高度还得反过来决定时间行怎么摆，
        这件事 CSS 做不到（矮块里的两行会被裁掉半行）。 */
     _buildCalendarTimelineEvents(parsed, layout) {
@@ -4316,29 +4359,20 @@
       /* 顺序摆 + 最小间距：上一块的块底就是下一块的近端下限，
          挤在一起的记录（如 12:39 / 12:40 各一条）依次往下排，不再叠字 */
       let prevBottom = -WEEK_EVENT_GAP;
-      return parsed.map((x, i) => {
-        const { end, explicitEnd, nextStart } = this._calTimelineEndMin(parsed, i);
-        /* 只有「有真实来源」且结束确实晚于开始时才表述成区间；
-           否则只显示起始时间，不编一个结束时间出来 */
-        const showRange =
-          end > x.range.start && (explicitEnd !== null || nextStart !== null);
-
-        const top = Math.max(yOf(x.range.start), prevBottom + WEEK_EVENT_GAP);
-        const height = Math.max(
-          WEEK_MIN_BLOCK_H,
-          yOf(end) - yOf(x.range.start)
-        );
+      return parsed.map((x) => {
+        const top = Math.max(yOf(x.start), prevBottom + WEEK_EVENT_GAP);
+        const height = Math.max(WEEK_MIN_BLOCK_H, yOf(x.end) - yOf(x.start));
         prevBottom = top + height;
 
         /* 块够高就上下两行：标题一行、完整区间一行。
-           不够高（当天末条基本都是这种）就压成一行，时间只写起始 ——
-           宁可少写个结束时间，也不能让起始时间整个看不见。
+           不够高（当天首 / 末条基本都是这种）就压成一行，时间只写节点时间 ——
+           宁可少写个结束时间，也不能让记录自己的那个时间整个看不见。
            一行时把时间放在标题**前面**：时间短且固定，放前面保证不会被裁掉，
            要裁就裁标题，反正完整记录还挂在悬停气泡上。 */
         const compact = height < WEEK_SHOWTIME_H;
         const label =
-          !compact && showRange
-            ? `${this._fmtMin(x.range.start)} - ${this._fmtMin(end)}`
+          !compact && x.hasRange
+            ? `${this._fmtMin(x.start)} - ${this._fmtMin(x.end)}`
             : this._fmtMin(x.range.start);
 
         const r = x.record;
@@ -4384,8 +4418,11 @@
      * ============================================================ */
 
     /* 一天的记录 → 带「起止 + 时长」的行数据。
-       时长规则与时间轴 / 统计完全一致：显式区间优先，否则接到下一条开始，
-       当天最后一条补 WEEK_DEFAULT_MIN；时间解析不出的行不编时长（表格里显示 —）。 */
+       起止与时长跟时间轴 / 统计同源（_resolveDayRanges，按「时间计算模式」算）：
+       结束模式一条记录算「上一条 → 本条」，开始模式算「本条 → 下一条开始」；
+       当天没有参照的那条不编区间（hasRange 为 false，时间列只写节点时间），
+       时长仍按最小跨度计，好让分组头能报出一个「共 X」。不跨天。
+       时间解析不出的行不编时长（表格里显示 —）。 */
     _calDayRows(records) {
       const rows = (records || []).map((r) => ({
         record: r,
@@ -4394,18 +4431,12 @@
       const timed = rows
         .filter((x) => x.range)
         .sort((a, b) => a.range.start - b.range.start);
+      const ranges = this._resolveDayRanges(timed);
       timed.forEach((x, i) => {
-        const next = timed[i + 1];
-        let end =
-          x.range.end !== null
-            ? x.range.end
-            : next
-            ? next.range.start
-            : x.range.start + WEEK_DEFAULT_MIN;
-        if (end <= x.range.start) end = x.range.start + 1;
-        x.start = x.range.start;
-        x.end = end;
-        x.dur = end - x.range.start;
+        x.start = ranges[i].start;
+        x.end = ranges[i].end;
+        x.hasRange = ranges[i].hasRange;
+        x.dur = ranges[i].dur;
       });
       /* 有时间的按时间先后靠前，没时间的沉到最后（顺序稳定，不再打乱） */
       return rows.sort((a, b) => {
@@ -4592,10 +4623,13 @@
                 r.content
               )}${hint ? ` (${hint})` : ""}`.trim();
               const typeName = (r.type || "").trim();
-              /* 时间列：能算出区间就给区间（与时间轴同一口径），否则原样显示记录里的时间 */
-              const timeText = x.range
+              /* 时间列：能算出区间就给区间（与时间轴同一口径）；
+                 当天首 / 末条没有参照，只写记录里那个节点时间，不编端点出来 */
+              const timeText = !x.range
+                ? (r.time || "").trim() || "—"
+                : x.hasRange
                 ? `${this._fmtMin(x.start)} - ${this._fmtMin(x.end)}`
-                : ((r.time || "").trim() || "—");
+                : this._fmtMin(x.range.start);
               return `<tr class="north-caltab-table-row"${
                 r.id ? ` data-cal-id="${escapeHtml(r.id)}"` : ""
               } data-tip="${escapeHtml(tip)}">
@@ -5001,8 +5035,13 @@
        （数据一重拉就是新数组，_calSourceRecords() 返回的引用会变）。 */
     _habitRowsByDate(year) {
       const src = this._calSourceRecords() || [];
+      /* 缓存身份三家：年份 + 数据数组本身 + 当前时间计算模式。
+         时长口径跟着模式走，换了模式必须整份重算，不能沿用上一套。 */
+      const mode = this._timeCalcMode();
       const cache = this._habitRowsCache;
-      if (cache && cache.year === year && cache.src === src) return cache.map;
+      if (cache && cache.year === year && cache.src === src && cache.mode === mode) {
+        return cache.map;
+      }
       const byDate = this._groupByDate(src);
       const map = {};
       for (let m = 0; m < 12; m++) {
@@ -5013,13 +5052,14 @@
           if (all && all.length) map[key] = this._calDayRows(all);
         }
       }
-      this._habitRowsCache = { year, src, map };
+      this._habitRowsCache = { year, src, mode, map };
       return map;
     }
 
     /* 某类型一年里每天的表现：{ days: {日期键: {cnt, min}}, totalCnt, totalMin }
-       时长口径就是上面那份缓存（= _calDayRows：显式区间 > 接到下一条 >
-       当天最后一条补默认值），再按类型挑出属于这个习惯的行。 */
+       时长口径就是上面那份缓存（= _calDayRows，跟着「时间计算模式」走：
+       显式区间优先，结束模式算「上一条 → 本条」，开始模式算「本条 → 下一条」），
+       再按类型挑出属于这个习惯的行。 */
     _habitYearData(type, year) {
       const map = this._habitRowsByDate(year);
       const days = {};

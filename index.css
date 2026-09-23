@@ -820,6 +820,13 @@
 .tt-types__group-desc-input::placeholder {
   color: color-mix(in srgb, var(--b3-theme-on-surface) 45%, transparent);
 }
+/* 类型芯片等宽排布：基准宽 101px 加 8px 间距，一行正好排下 5 个芯片
+   （28 的「+」+ 8 + 5×101 + 4×8 = 573，行宽 584 还剩 11px），右侧不再留参差的空白。
+   这里用 flex 而不是 grid —— 「+」按钮要跟芯片排在同一条流里：它在行首保持
+   原来 28px 的小方块，换行后的芯片也照旧从最左边开始，与「+」左对齐。
+   网格做不到这一点：格子等宽会把「+」也拉成一格，或者让它右边空出一格。
+   box-sizing 必须钉成 border-box：flex-basis 是按它算的，要是跟着全局走成
+   content-box，101px 会变成「内容宽」，加上内边距实际到 117px，一行就只排得下 4 个。 */
 .tt-types__group-items {
   display: flex;
   flex-wrap: wrap;
@@ -831,15 +838,24 @@
   display: inline-flex;
   align-items: center;
   gap: 0;
+  box-sizing: border-box;
+  /* 允许被压窄：不加这句，长名字会把整行顶乱 */
+  min-width: 0;
   padding: 3px 8px 3px 6px;
   background: var(--b3-theme-surface);
   border: 1px solid color-mix(in srgb, var(--b3-border-color) 40%, transparent);
   border-radius: 6px;
   transition: border-color 0.15s, background-color 0.15s;
 }
+/* 只定宽不撑宽：最后一行不足 5 个时，芯片不会被抻成一条长条 */
+.tt-types__item {
+  flex: 0 1 101px;
+}
+/* 「+」保持原来的小方块，不跟着芯片一起变化 */
 .tt-types__item-add {
   justify-content: center;
-  min-width: 28px;
+  flex: 0 0 28px;
+  width: 28px;
   height: 28px;
   padding: 0;
   color: var(--b3-theme-on-surface);
@@ -878,11 +894,17 @@
   transform: scale(1.1);
 }
 .tt-types__item-name {
+  /* 芯片在网格里等宽，名字输入框吃掉中间剩下的那段：
+     名字短就在右侧留白，名字长到放不下就截成省略号，芯片本身的宽度不动 */
+  flex: 1 1 0;
   width: auto;
-  min-width: 18px;
-  max-width: 120px;
-  margin: 0 0 0 8px;
+  min-width: 0;
+  max-width: none;
+  margin: 0 0 0 6px;
   padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: none;
   border-bottom: 1px solid transparent;
   background: transparent;
