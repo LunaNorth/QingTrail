@@ -5504,10 +5504,10 @@
           vw ? " is-set" : ""
         }" type="button" data-caltab-habitview="${escapeHtml(
           type
-        )}" data-tip="${
+        )        }" data-tip="${
           vw
-            ? "查看窗口：顶部选「范围」时只看这一段"
-            : "用顶部的全局范围，点开可单独设置"
+            ? "查看窗口：范围模式下这张卡只看这一段"
+            : "跟随顶部全局范围，点开可单独设置"
         }">${sicon("iconCalendar")}${escapeHtml(vw ? vw.label : "默认")}</button>`;
 
       /* 查看窗口设置条：预设一眼全在；选「自定义」再补一对起止日期。
@@ -5542,11 +5542,7 @@
                 <span class="north-caltab-habit-vpresets">${HABIT_VIEW_PRESETS.map(
                   preBtn
                 ).join("")}</span>
-                <span class="north-caltab-habit-vnote">${
-                  period === "range"
-                    ? "只看这一段，别的习惯各看各的"
-                    : "顶部段位切到「范围」时生效"
-                }</span>
+                <span class="north-caltab-habit-vnote">只看这一段，别的习惯各看各的</span>
                 ${custom}
             </div>`;
       };
@@ -5892,7 +5888,7 @@
                       label
                     )}<span class="north-caltab-habit-goal">${habitGoalText(
           cfg
-        )}</span>${viewChip(type, vw)}</span>
+        )}</span>${p === "range" ? viewChip(type, vw) : ""}</span>
                     <span class="north-caltab-habit-stats">
                         <span>${sicon("iconPlugZap")}连续 <b>${streak.n}</b> ${streak.unit}</span>
                         <span>${sicon("iconStar")}最长 <b>${longest.n}</b> ${longest.unit}</span>
@@ -5906,7 +5902,7 @@
         )}</b></span>
                     </span>
                 </div>
-                ${viewPanel(type, vw)}
+                ${p === "range" ? viewPanel(type, vw) : ""}
                 <div class="north-caltab-habit-heat">${heatHtml}</div>
                 ${
                   p === "year" || p === "range"
@@ -5986,8 +5982,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span>${viewChip(type, viewOf(type))}</div>
-                ${viewPanel(type, viewOf(type))}
+        )}</span></div>
                 <div class="north-caltab-habit-weekrow">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -6046,8 +6041,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span>${viewChip(type, viewOf(type))}</div>
-                ${viewPanel(type, viewOf(type))}
+        )}</span></div>
                 <div class="north-caltab-habit-mcal">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -6086,8 +6080,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span>${viewChip(type, viewOf(type))}</div>
-                ${viewPanel(type, viewOf(type))}
+        )}</span></div>
                 <div class="north-caltab-habit-dmain"><b class="north-caltab-habit-dval">${valTxt}</b><span class="north-caltab-habit-dbadge ${
                   ok ? "ok" : "no"
                 }">${badge}</span></div>
@@ -6145,7 +6138,43 @@
       /* 收起 / 展开共用的小箭头（内联 path，不依赖思源图标清单） */
       const chevSvg =
         '<svg class="north-caltab-habit-chev" viewBox="0 0 24 24" width="12" height="12"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-      const leftLabel = (left) => (left > 0 ? `剩余 ${left} 天` : "最后 1 天");
+      /* 「剩余 N 天」角标：跟着**顶部段位**走，看的是当前这段日子还剩几天没过 ——
+         月视图数本月（月末天数 - 今天几号）、周视图数本周（7 - 已过天数，与
+         「每周 N 天」目标同一套口径）、范围模式数窗口里今天之后还剩几天；
+         日 / 年视图没有「补进度」的概念，不显示角标。
+         文案带上段位前缀（本周剩余 / 本月剩余），一眼看出数的是哪一段；
+         范围模式不加前缀（窗口就摆在旁边的日期字段里）。
+         数出来的都是「还没过」的天数（今天不算），期中最后一天显示「最后 1 天」；
+         范围已经结束（今天在窗口之后）时同样不显示。 */
+      const leftPrefix =
+        period === "week" ? "本周" : period === "month" ? "本月" : "";
+      const leftLabel = (left) =>
+        left == null || left < 0
+          ? ""
+          : left > 0
+            ? `${leftPrefix}剩余 ${left} 天`
+            : `${leftPrefix}最后 1 天`;
+      const periodLeft = (() => {
+        const t0 = new Date();
+        t0.setHours(0, 0, 0, 0);
+        if (period === "month") {
+          const dim = new Date(t0.getFullYear(), t0.getMonth() + 1, 0).getDate();
+          return dim - t0.getDate();
+        }
+        if (period === "week") {
+          const ws = this._calTabWeekStartDate(t0);
+          const elapsed = Math.min(
+            7,
+            Math.max(1, Math.round((t0 - ws) / 86400000) + 1)
+          );
+          return 7 - elapsed;
+        }
+        if (period === "range") {
+          const win = rangeWin || this._habitRangeWindow();
+          return Math.round((win.end - t0) / 86400000);
+        }
+        return null;
+      })();
 
       /* 每个习惯「自己那个周期」的当前进度：
          日目标 → 本周达标天数 / 本周已过天数；周目标 → 本周累计 / 目标；
@@ -6179,7 +6208,6 @@
             goal: wElapsed,
             pct: Math.min(100, Math.round((done / wElapsed) * 100)),
             suffix: " 天",
-            left: 7 - wElapsed,
           };
         }
         const cum =
@@ -6196,12 +6224,12 @@
           goal: cfg.goal,
           pct: Math.min(100, Math.round((cum / (cfg.goal || 1)) * 100)),
           suffix: cfg.goalUnit === "days" ? " 天" : "",
-          left: 7 - wElapsed,
         };
       };
       const fmtP = (n) => Math.round(n * 10) / 10;
 
-      /* 组合统计：完成率 = 各习惯自己周期进度的平均值；卡与展开节共用 */
+      /* 组合统计：完成率 = 各习惯自己周期进度的平均值；卡与展开节共用。
+         「剩余天数」角标用 periodLeft（跟着顶部段位走），不跟单个习惯的周期。 */
       const gstats = (members) => {
         let s = 0;
         members.forEach((t) => {
@@ -6209,7 +6237,7 @@
         });
         return {
           rate: members.length ? Math.round(s / members.length) : 0,
-          left: progOf(members[0]).left,
+          left: periodLeft,
         };
       };
 
@@ -6237,7 +6265,7 @@
                     <span class="north-caltab-habit-gsum-label">本期</span>
                     <b class="north-caltab-habit-gsum-rate">${s.rate}%</b>
                     <div class="north-caltab-habit-gsum-track is-main"><i style="width:${s.rate}%"></i></div>
-                    <span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>
+                    ${leftLabel(s.left) ? `<span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>` : ""}
                 </div>
                 <div class="north-caltab-habit-gsum-items">${members
                   .map(miniRow)
@@ -6255,7 +6283,7 @@
         )}">
                 <div class="north-caltab-habit-gcard-head">
                     <b class="north-caltab-habit-gcard-rate">${s.rate}%</b>
-                    <span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>
+                    ${leftLabel(s.left) ? `<span class="north-caltab-habit-gsum-left">${leftLabel(s.left)}</span>` : ""}
                     ${chevSvg}
                 </div>
                 <div class="north-caltab-habit-gcard-name">${escapeHtml(g.name)}</div>
@@ -7777,13 +7805,10 @@
               this._habitSetView(t, p);
               this._calTabHabitViewOpen = "";
             }
-            /* 「查看窗口」只在范围模式下看得见，所以设完顺手把段位切过去 ——
-               不然在年 / 月视图里点了「近 100 天」，屏幕上一点变化都没有，
-               看着像没生效。选「跟随顶部」（p 为空）只是清掉配置，不动段位。 */
-            if (p && (this._calTabHabitPeriod || "year") !== "range") {
-              this._calTabHabitPeriod = "range";
-              this._calTabHabitAnchor = new Date();
-            }
+            /* 设窗口只落盘，**不动顶部段位、不动锚点** —— 日 / 周 / 月 / 年
+               正看着的时候配个窗口，不该把整个屏幕拽去「范围」。
+               什么时候生效面板上的提示写着（「顶部段位切到「范围」时生效」），
+               胶囊标签也会立刻换成所选窗口，反馈看得见，不用抢段位的活。 */
           }
           this._calTabHabitRangePick = "";
           this._calTabHabitRangeScope = "";
