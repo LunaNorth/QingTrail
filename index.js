@@ -183,6 +183,26 @@
   /* 动态标记样式的 style 元素 id：按块属性把类型颜色映射到 --tt-c */
   const MARK_STYLE_ID = "tt-mark-style";
 
+  /* 「思维导图视图」范围识别，用法见 _isInListMindmap()。
+     思源两代之间把这套记号改过名，所以显式记号 + 模糊兜底都留着 ——
+     少认一个，就会在对应版本上复发（3.8.6-alpha 已实测复发过一次）：
+       3.8.5       容器 .list-mindmap，列表块带 data-list-mindmap-rendered
+       3.8.6-alpha 容器 .mindmap-view，块带 data-mindmap-view-rendered，
+                   专用块类型 NodeMindmap / 节点 NodeMindmapItem
+     模糊兜底按「类名或块类型里带 mindmap」匹配祖先：思源这套记号不管怎么改名，
+     mindmap 这个词一直在，以后再改名也不会又漏一次。 */
+  const LIST_MINDMAP_SELECTOR = [
+    /* 显式记号：两代写法都列上，改名前后哪个在都能命中 */
+    ".list-mindmap",
+    ".mindmap-view",
+    "[data-list-mindmap-rendered]",
+    "[data-mindmap-view-rendered]",
+    "[custom-sy-list-mindmap]",
+    /* 兜底：类名（list-mindmap__x / mindmap-view__x）或块类型（NodeMindmap[Item]）带 mindmap */
+    '[class*="mindmap"]',
+    '[data-type*="Mindmap"]',
+  ].join(", ");
+
   /* 下划线线宽：默认 0.75px，可在插件设置「控制设置 / 下划线粗细」中调整。
      0 = 无，即不画线（只保留可选的「记录底色」）。
      这一档是给「和别的插件叠在一起」准备的：叶归等插件也会给 LifeLog 记录画底线，
@@ -9315,7 +9335,30 @@
       return this._validId(id) ? id : "";
     }
 
+    /* 段落是不是落在「思维导图视图 / 思维导图块」里。
+       这个范围要整段跳过、一点都不碰 —— 原因是思源给脑图节点的编辑做了一条
+       「进入编辑那一刻，节点块的 outerHTML 快照」校验：保存前如果节点的
+       outerHTML 变了，就认定内容被外部改过，弹「内容已更新，请重新编辑」
+       并放弃这一次输入（思源源码 app/src/protyle/render/listMindmap/editor.ts
+       里的 nodeContent() / comparableContent() 对比 + listMindmapStale 文案）。
+       而我们给段落加的类名（tt-hit / tt-nomark）和内联变量（--tt-c）都会进
+       outerHTML，于是打字打到一半就被判成「内容已更新」，表现就是输入发卡、
+       回车换行后报错；同理，往脑图节点的块上写记录属性也会触发同一条判定。
+       所以脑图范围里一律不上色、不打标、不写属性 —— 反正节点预览是源块的克隆，
+       类名和块属性都会照旧带过去，样式表照样给容器里的 .protyle-wysiwyg
+       段落上色，看起来和列表视图一致，只是不再由脚本现场改 DOM。
+       注意范围记号两代不同名（见 LIST_MINDMAP_SELECTOR），两代都要认。 */
+    _isInListMindmap(node) {
+      return !!(
+        node &&
+        typeof node.closest === "function" &&
+        node.closest(LIST_MINDMAP_SELECTOR)
+      );
+    }
+
     _clearMark(p) {
+      /* 脑图范围一次 DOM 都不改（原因见 _isInListMindmap） */
+      if (this._isInListMindmap(p)) return;
       p.classList.remove("tt-hit");
       /* 段落上可能仍留着记录类型属性，而样式表会照属性直接上色
          （这是「刷新即显示」的来源），所以范围外或不再命中的段落
@@ -9327,6 +9370,8 @@
 
     /* 命中记录行格式时只打一个类名，颜色交给样式表的属性选择器 */
     _applyMark(p) {
+      /* 脑图范围一次 DOM 都不改（原因见 _isInListMindmap） */
+      if (this._isInListMindmap(p)) return;
       p.classList.remove("tt-nomark");
       p.classList.add("tt-hit");
     }
@@ -9422,6 +9467,9 @@
        表现为「回车里闪一下」。 */
     _refreshVisualMark(p) {
       if (!p || typeof p.getAttribute !== "function") return;
+      /* 脑图范围里的段落不动手：改了 outerHTML 会把思源的节点编辑判成
+         「内容已更新，请重新编辑」（原因见 _isInListMindmap） */
+      if (this._isInListMindmap(p)) return;
       /* 看的是「时间 类型：」有没有齐 —— 类型一敲定就算过关，不等内容写完。
          颜色当场按类型配置内联写上，所以下划线出现时就是对色，
          不会先落一个「未配置类型」的兜底灰、等属性入库再变。 */
@@ -9447,6 +9495,9 @@
     async _handleParagraph(p) {
       try {
         if (!p || typeof p.getAttribute !== "function") return;
+        /* 脑图范围里的段落不处理：既不上色，也不写块属性 ——
+           写属性同样会让思源判定「内容已更新，请重新编辑」（原因见 _isInListMindmap） */
+        if (this._isInListMindmap(p)) return;
         const blockId = p.getAttribute("data-node-id");
         const docId = this._docIdOf(p);
         if (!this._validId(blockId) || !this._validId(docId)) return;
@@ -9522,6 +9573,12 @@
              删除之后就查不到了，所以在这里就判掉。 */
           let removedRecord = false;
           for (const m of mutations) {
+            /* 脑图范围内的变动一律略过：那是思源自己在维护节点预览与节点内嵌编辑器，
+               我们既不该给它们打标，也不该把它们的增删当成「记录被删了」。
+               这里判的是 m.target（变更发生的位置）而不是被增删的那个节点 ——
+               节点被移走之后已经脱离文档，那时再 closest() 是认不出脑图容器的
+               （脑图刷新节点时正是 replaceChildren，一批旧节点会当场失去父级）。 */
+            if (this._isInListMindmap(m.target)) continue;
             if (m.type === "characterData") {
               let p = m.target;
               while (p && p !== editor) {
@@ -9615,13 +9672,20 @@
 
     /* 扫描当前打开文档中「记录范围内」的段落并打标 */
     async scanAndTag() {
-      const paragraphs = Array.from(
+      const allParas = Array.from(
         document.querySelectorAll(
           '.protyle-wysiwyg [data-type="NodeParagraph"]'
         )
       );
-      if (paragraphs.length === 0) {
+      if (allParas.length === 0) {
         showMessage(`${NAME}：未检测到打开的文档`);
+        return;
+      }
+      /* 脑图范围里的段落不扫：扫描要写块属性，写到脑图节点的块上会让思源
+         判定「内容已更新，请重新编辑」（原因见 _isInListMindmap） */
+      const paragraphs = allParas.filter((p) => !this._isInListMindmap(p));
+      if (paragraphs.length === 0) {
+        showMessage(`${NAME}：当前文档的列表以思维导图显示，请先切回列表再扫描`);
         return;
       }
 
