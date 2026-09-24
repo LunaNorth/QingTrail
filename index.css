@@ -4777,23 +4777,21 @@
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
 }
-/* 类型占比：环形图在左（中心放总数），芯片网格做图例在右；
-   窄容器自动换行，图例落到图下面 */
+/* 类型占比：环形图在上（居中、放大一档），芯片图例铺满在下方 */
 .north-caltab-stats-typedist {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  gap: 16px;
 }
-/* 图例吃掉环形图右侧的剩余宽度（窄到放不下时整体换到图下面） */
 .north-caltab-stats-typedist .north-caltab-stats-chips {
-  flex: 1 1 240px;
+  width: 100%;
 }
 .north-caltab-stats-donut {
   position: relative;
   flex: 0 0 auto;
-  width: 132px;
-  height: 132px;
+  width: 180px;
+  height: 180px;
 }
 .north-caltab-stats-donut svg {
   display: block;
@@ -4818,17 +4816,25 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
+  gap: 2px;
   pointer-events: none;
 }
 .north-caltab-stats-donut-center b {
-  font-size: 20px;
+  font-size: 28px;
   line-height: 1.2;
   color: var(--b3-theme-on-background);
 }
 .north-caltab-stats-donut-center span {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--b3-theme-on-surface-light);
+}
+/* 图例芯片：类型名占满中段，占比% 顶到最右（参考图同款） */
+.north-caltab-stats-chip .north-caltab-stats-chip-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .north-caltab-stats-chip {
   display: flex;

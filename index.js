@@ -5391,61 +5391,9 @@
           : `<div class="north-caltab-stats-empty">这段周期还没有记录，记下第一条就能看到走势了</div>`;
 
       /* ==================== 类型分布：环形图 + 胶囊芯片图例 ====================
-         环形图扇区按条数占比、用类型自身配色（与全插件色彩体系一致），
-         中心放总数；悬停扇区看条数 / 占比 / 用时。
-         旁边的芯片就是图例：值直接标占比%，条数与用时进悬停气泡 ——
-         数据全部来自上面那份 typeRows，不另起第二套口径。 */
-      const unitShort = unit.replace(/记录$|文档$/, "");
-      const typeTotal = typeRows.reduce((s, t) => s + t.cnt, 0);
-      /* 环形几何：stroke-dasharray 画弧 —— 每段弧长 = 占比 × 周长（再扣 2px 缝），
-         dashoffset 依次前移累出首尾相接；rotate(-90) 让 0% 从顶部起，
-         只有 1 个类型时不留缝（一整圈就是一个颜色）。 */
-      const DONUT_S = 120;
-      const DONUT_C = DONUT_S / 2;
-      const DONUT_R = 44;
-      const DONUT_CIRC = 2 * Math.PI * DONUT_R;
-      const DONUT_GAP = typeRows.length > 1 ? 2 : 0;
-      let donutAcc = 0;
-      const donutSegs = typeRows
-        .map((t) => {
-          const frac = typeTotal > 0 ? t.cnt / typeTotal : 0;
-          const len = Math.max(0, frac * DONUT_CIRC - DONUT_GAP);
-          const seg = `<circle cx="${DONUT_C}" cy="${DONUT_C}" r="${DONUT_R}" fill="none" stroke="${
-            t.color
-          }" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(
-            DONUT_CIRC - len
-          ).toFixed(2)}" stroke-dashoffset="${(-donutAcc).toFixed(
-            2
-          )}" class="north-caltab-stats-donut-seg" data-tip="${escapeHtml(
-            `${t.name} · ${t.cnt} ${unit} · ${(frac * 100).toFixed(1)}% · 用时 ${this._fmtStatsDur(t.min)}`
-          )}"></circle>`;
-          donutAcc += frac * DONUT_CIRC;
-          return seg;
-        })
-        .join("");
-      const donutHtml = `<div class="north-caltab-stats-donut">
-            <svg viewBox="0 0 ${DONUT_S} ${DONUT_S}" role="img" aria-label="类型占比环形图">
-                <g transform="rotate(-90 ${DONUT_C} ${DONUT_C})">${donutSegs}</g>
-            </svg>
-            <div class="north-caltab-stats-donut-center"><b>${typeTotal}</b><span>${
-              unitShort || unit
-            }</span></div>
-        </div>`;
-      const typeChipsHtml = typeRows
-        .map((t) => {
-          const pct = typeTotal > 0 ? ((t.cnt / typeTotal) * 100).toFixed(1) : "0.0";
-          return `<div class="north-caltab-stats-chip" data-tip="${escapeHtml(
-            `${t.name} · ${t.cnt} ${unit} · 用时 ${this._fmtStatsDur(t.min)}`
-          )}">
-                <i class="north-caltab-stats-chip-dot" style="background:${t.color}"></i>
-                <span class="north-caltab-stats-chip-name">${escapeHtml(t.name)}</span>
-                <span class="north-caltab-stats-chip-val">${pct}%</span>
-            </div>`;
-        })
-        .join("");
-      const typesBody = typeRows.length
-        ? `<div class="north-caltab-stats-typedist">${donutHtml}<div class="north-caltab-stats-chips">${typeChipsHtml}</div></div>`
-        : `<div class="north-caltab-stats-empty">这一段还没有带类型的记录</div>`;
+         基础行数据（页面周期口径），只喂给「周期概览」的类型数卡片；
+         真正的环形图区块在下面 —— 它带自己的一套 日/周/月/年 周期切换
+         （与「时长统计」同款），两者互不干扰。 */
 
       /* 卡片区块：区块头左标题、右副题、下有分隔线（后续各区块共用） */
       const section = (title, sub, body) =>
@@ -5561,6 +5509,7 @@
          单元格「占比% + 条数」并列（占比按全年总数算），空格画「-」，
          tfoot 一行「总计」。年内没有记录时整个区块不渲染。 */
       const NO_TYPE = "(无类型)";
+      const unitShort = unit.replace(/记录$|文档$/, "");
       const detailMap = {};
       let detailYearTotal = 0;
       this._calTabFilteredRecords().forEach((r) => {
@@ -5745,6 +5694,107 @@
             }
         </div>`;
 
+      /* ==================== 类型分布：环形图 + 芯片图例（自配周期） ====================
+         与「时长统计」同款局部周期（日 / 周 / 月 / 年，切换时锚点回到今天，
+         翻页箭头只挪自己的锚点）。环形图在**上**（更大、居中），扇区按条数占比
+         切分、用类型自身配色，中心放总数；芯片图例铺满**下方**，右侧直接标
+         占比%，条数与用时进悬停气泡 —— 一份数据两处展示，不另起口径。 */
+      if (!this._calTabTypePeriod) this._calTabTypePeriod = "month";
+      if (!(this._calTabTypeAnchor instanceof Date)) this._calTabTypeAnchor = new Date();
+      const typePeriod = this._calTabTypePeriod;
+      const typeWindow = this._computeLifeLogDockPeriod(typePeriod, this._calTabTypeAnchor);
+      const typeStats = this._statsTypeDurations(
+        this._filterLifeLogDockByRange(
+          this._calTabFilteredRecords(),
+          typeWindow.start,
+          typeWindow.end
+        )
+      );
+      const typePieRows = Array.from(typeStats.counts.keys())
+        .map((name) => ({
+          name,
+          cnt: typeStats.counts.get(name) || 0,
+          min: typeStats.minutes.get(name) || 0,
+          color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+        }))
+        .sort((a, b) => b.cnt - a.cnt);
+      const typeTotalCnt = typePieRows.reduce((s, t) => s + t.cnt, 0);
+      /* 环形几何：stroke-dasharray 画弧 —— 每段弧长 = 占比 × 周长（再扣 2px 缝），
+         dashoffset 依次前移累出首尾相接；rotate(-90) 让 0% 从顶部起，
+         只有 1 个类型时不留缝（一整圈就是一个颜色）。 */
+      const DONUT_S = 120;
+      const DONUT_C = DONUT_S / 2;
+      const DONUT_R = 44;
+      const DONUT_CIRC = 2 * Math.PI * DONUT_R;
+      const DONUT_GAP = typePieRows.length > 1 ? 2 : 0;
+      let donutAcc = 0;
+      const donutSegs = typePieRows
+        .map((t) => {
+          const frac = typeTotalCnt > 0 ? t.cnt / typeTotalCnt : 0;
+          const len = Math.max(0, frac * DONUT_CIRC - DONUT_GAP);
+          const seg = `<circle cx="${DONUT_C}" cy="${DONUT_C}" r="${DONUT_R}" fill="none" stroke="${
+            t.color
+          }" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(
+            DONUT_CIRC - len
+          ).toFixed(2)}" stroke-dashoffset="${(-donutAcc).toFixed(
+            2
+          )}" class="north-caltab-stats-donut-seg" data-tip="${escapeHtml(
+            `${t.name} · ${t.cnt} ${unit} · ${(frac * 100).toFixed(1)}% · 用时 ${this._fmtStatsDur(t.min)}`
+          )}"></circle>`;
+          donutAcc += frac * DONUT_CIRC;
+          return seg;
+        })
+        .join("");
+      const donutHtml = `<div class="north-caltab-stats-donut">
+            <svg viewBox="0 0 ${DONUT_S} ${DONUT_S}" role="img" aria-label="类型占比环形图">
+                <g transform="rotate(-90 ${DONUT_C} ${DONUT_C})">${donutSegs}</g>
+            </svg>
+            <div class="north-caltab-stats-donut-center"><b>${typeTotalCnt}</b><span>${
+              unitShort || unit
+            }</span></div>
+        </div>`;
+      const typeChipsHtml = typePieRows
+        .map((t) => {
+          const pct = typeTotalCnt > 0 ? ((t.cnt / typeTotalCnt) * 100).toFixed(1) : "0.0";
+          return `<div class="north-caltab-stats-chip" data-tip="${escapeHtml(
+            `${t.name} · ${t.cnt} ${unit} · 用时 ${this._fmtStatsDur(t.min)}`
+          )}">
+                <i class="north-caltab-stats-chip-dot" style="background:${t.color}"></i>
+                <span class="north-caltab-stats-chip-name">${escapeHtml(t.name)}</span>
+                <span class="north-caltab-stats-chip-val">${pct}%</span>
+            </div>`;
+        })
+        .join("");
+      const typePeriodNames = { day: "日", week: "周", month: "月", year: "年" };
+      const typePrevTips = { day: "前一天", week: "上一周", month: "上个月", year: "上一年" };
+      const typeNextTips = { day: "后一天", week: "下一周", month: "下个月", year: "下一年" };
+      const typeSection = `<div class="north-caltab-stats-section">
+            <div class="north-caltab-stats-header north-caltab-stats-header-dur">
+                <span>类型分布</span>
+                <div class="north-caltab-stats-durhead">
+                    <div class="north-caltab-segments north-caltab-stats-durperiods">
+                        ${["day", "week", "month", "year"]
+                          .map(
+                            (p) =>
+                              `<button class="${typePeriod === p ? "active" : ""}" data-caltab-typeperiod="${p}">${typePeriodNames[p]}</button>`
+                          )
+                          .join("")}
+                    </div>
+                    <div class="north-caltab-stats-durnav">
+                        <button class="north-caltab-stats-durnavbtn" data-caltab-typenav="prev" data-tip="${typePrevTips[typePeriod]}"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconLeft"></use></svg></button>
+                        <span class="north-caltab-stats-durlabel">${typeWindow.label}</span>
+                        <button class="north-caltab-stats-durnavbtn" data-caltab-typenav="next" data-tip="${typeNextTips[typePeriod]}"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconRight"></use></svg></button>
+                    </div>
+                    <span class="north-caltab-stats-sub">合计 ${typeTotalCnt}${unitShort}</span>
+                </div>
+            </div>
+            ${
+              typePieRows.length
+                ? `<div class="north-caltab-stats-typedist">${donutHtml}<div class="north-caltab-stats-chips">${typeChipsHtml}</div></div>`
+                : `<div class="north-caltab-stats-empty">这段周期还没有带类型的记录</div>`
+            }
+        </div>`;
+
       /* ==================== 拼装 ====================
          顶栏（周期 pill + 周期文字）暂不渲染：与工具栏左上的日期显示重复，
          那个位置留给后续规划；周期本身仍由「今天 / 翻页箭头」按当前周期走。 */
@@ -5756,7 +5806,7 @@
             ${detailSection}
             ${section("每日走势", trendSub, trendBody)}
             ${durSection}
-            ${section("类型分布", `${typeRows.length} 个类型`, typesBody)}
+            ${typeSection}
         </div>`;
     }
     /* 时间轴视图（周 / 三日 / 日）摆块的三步走：
@@ -9522,6 +9572,32 @@
           else if (p === "year") a.setFullYear(a.getFullYear() + dir);
           else a.setDate(a.getDate() + 7 * dir);
           this._calTabDurAnchor = a;
+          this._paintCalendarTab(container);
+          return;
+        }
+        /* 类型分布：局部周期切换（锚点回到今天）与翻页 —— 与时长统计同款 */
+        const typePeriodBtn = e.target.closest && e.target.closest("[data-caltab-typeperiod]");
+        if (typePeriodBtn) {
+          const p = typePeriodBtn.dataset.caltabTypeperiod;
+          if (["day", "week", "month", "year"].indexOf(p) >= 0) {
+            this._calTabTypePeriod = p;
+            this._calTabTypeAnchor = new Date();
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        const typeNavBtn = e.target.closest && e.target.closest("[data-caltab-typenav]");
+        if (typeNavBtn) {
+          const dir = typeNavBtn.dataset.caltabTypenav === "next" ? 1 : -1;
+          const p = this._calTabTypePeriod || "month";
+          const a = new Date(
+            this._calTabTypeAnchor instanceof Date ? this._calTabTypeAnchor : new Date()
+          );
+          if (p === "day") a.setDate(a.getDate() + dir);
+          else if (p === "month") a.setMonth(a.getMonth() + dir);
+          else if (p === "year") a.setFullYear(a.getFullYear() + dir);
+          else a.setDate(a.getDate() + 7 * dir);
+          this._calTabTypeAnchor = a;
           this._paintCalendarTab(container);
           return;
         }
