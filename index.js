@@ -28,9 +28,60 @@
   /* 日历标签页：addTab 注册用的类型名；openTab 时以 name + 该值作为 custom.id */
   const CAL_TAB_TYPE = "TimeTrailCalendar";
 
-  /* 日历标签页里已经接了视图的段位。七个都接上了 ——
+  /* 日历标签页里已经接了视图的段位。八个都接上了 ——
      以后再加段位，不在这里的点了只切高亮、不换内容。 */
-  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "stats"];
+  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "stats", "metric"];
+
+  /* ---- 指标（从记录内容里抽数值画折线） ----
+     指标 = 一条「从记录内容里抽出来的数值序列」：内容里写「体重 65.5」，就有对应的体重走势。
+     定义只存在插件设置里（data.metricGroups），解析**只读不写** ——
+     不写回文档、不加块属性，卸载插件不会在用户笔记里留下任何痕迹。
+     一个指标的要素（管理弹窗里逐项可改）：
+       match    匹配词：内容里出现任一才算这条记录（如「血糖」）
+       exclude  排除词：出现就跳过（比如同时记了别人的数据，用词一挡就不算自己的）
+       split    分线词：把同一指标拆成多条折线（血糖拆成空腹 / 餐后）
+       pick     同一条内容里有多个数字时怎么取（最后 / 平均 / 最大 / 最小 / 求和）
+       kind     数值类型：数字 / 时长（时长认「7小时30分」「7.5h」「7:30」）
+       scale    默认尺度：日 / 周 / 月 —— 同一份数据换个粒度看，这就是「看大类」
+       bucket   同一个桶里落进多条记录时怎么并成一个点
+       decimals 小数位、unit 单位、target 目标值（可选）、color 颜色
+     存储结构照抄 typeGroups（{name, desc, items}），管理弹窗复用那套 .tt-modal 骨架。 */
+  const METRIC_PICKS = [
+    { value: "last", label: "最后一个" },
+    { value: "first", label: "第一个" },
+    { value: "max", label: "最大值" },
+    { value: "min", label: "最小值" },
+    { value: "avg", label: "平均值" },
+    { value: "sum", label: "求和" },
+  ];
+  const METRIC_BUCKETS = [
+    { value: "last", label: "最后一条" },
+    { value: "first", label: "第一条" },
+    { value: "avg", label: "平均值" },
+    { value: "max", label: "最大值" },
+    { value: "min", label: "最小值" },
+    { value: "sum", label: "求和" },
+  ];
+  const METRIC_SCALES = [
+    { value: "day", label: "日" },
+    { value: "week", label: "周" },
+    { value: "month", label: "月" },
+  ];
+  /* 数值类型：auto 是默认档（UI 不再让人选，解析时自己判），
+     number / duration 留着给老配置与「就是想强制按某种读」的场合 */
+  const METRIC_KINDS = [
+    { value: "auto", label: "自动" },
+    { value: "number", label: "数字" },
+    { value: "duration", label: "时长" },
+  ];
+  /* 指标段位看多长一段（近 N 天；0 = 全部，从最早一条记录那天算起） */
+  const METRIC_SCOPES = [
+    { value: "30", label: "近 30 天" },
+    { value: "90", label: "近 90 天" },
+    { value: "365", label: "近一年" },
+    { value: "0", label: "全部" },
+  ];
+  const METRIC_SCOPE_DEFAULT = "90";
 
   /* ---- 习惯视图 ----
      习惯 = 用户从「记录类型」里自己挑出来的几个（挑哪些存在 settings.habitTypes，
@@ -90,13 +141,23 @@
   };
   /* 门槛的单位后缀：3 次 / 30 分 */
   const habitUnitLabel = (unit, v) => (unit === "min" ? `${v} 分` : `${v} 次`);
-  /* 目标一句话：每天 ≥ 5 次 / 每周 ≥ 3 天 / 每月 < 10 次 —— 卡片上的小徽标用 */
+  /* 目标一句话：每天 ≥ 5 次 / 每周 ≥ 3 天 / 每月 < 10 次 —— 卡片上的小徽标用。
+     设了时间范围再追加一段「9月1日 ~ 9月24日」（只填一头的那头显示 …），
+     四种卡片（年 / 周 / 月 / 日）头部都走这里，改一处全都有。 */
+  const habitDayShort = (s) => {
+    const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${+m[2]}月${+m[3]}日` : "";
+  };
   const habitGoalText = (cfg) => {
     const p = HABIT_PERIOD_LABEL[cfg.period] || "每天";
     if (cfg.period !== "day" && cfg.goalUnit === "days") {
       return `${p} ≥ ${cfg.goal} 天`;
     }
-    return `${p} ${cfg.dir === "bad" ? "<" : "≥"} ${habitUnitLabel(cfg.unit, cfg.goal)}`;
+    const base = `${p} ${cfg.dir === "bad" ? "<" : "≥"} ${habitUnitLabel(cfg.unit, cfg.goal)}`;
+    if (cfg.start || cfg.end) {
+      return `${base} · ${cfg.start ? habitDayShort(cfg.start) : "…"} ~ ${cfg.end ? habitDayShort(cfg.end) : "…"}`;
+    }
+    return base;
   };
 
   /* ---- 日历数据源 ----
@@ -286,6 +347,65 @@
 
   /* 底边线取类型色的百分比：颜色比底色深，保证线条清晰 */
   const MARK_LINE_MIX = 60;
+
+  /* ===================== 指标：定义归一化 ===================== */
+
+  /* 关键词 / 排除词 / 分线词都是「一个输入框里写多个词」：
+     空格、逗号（半角全角）、顿号、分号、竖线都当分隔符，用户怎么写都行。 */
+  const metricKw = (raw) =>
+    String(raw == null ? "" : raw)
+      .split(/[\s,，、;；|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  /* 指标定义归一化：任何一项缺失 / 写坏都回退到安全值，
+     这样后面所有解析代码都不用再防 undefined（跟 normRecordScope 那套一个思路）。 */
+  const normMetric = (raw) => {
+    const m = raw && typeof raw === "object" ? raw : {};
+    const s = (v) => String(v == null ? "" : v).trim();
+    const oneOf = (list, v, dflt) =>
+      list.some((o) => o.value === v) ? v : dflt;
+    const dec = Math.round(Number(m.decimals));
+    const target = s(m.target) === "" ? null : Number(m.target);
+    return {
+      name: s(m.name),
+      unit: s(m.unit),
+      color: safeColor(m.color) || DEFAULT_TYPE_COLOR,
+      match: s(m.match),
+      /* 绑定的记录类型（"" = 不限）。指标先按类型圈定记录，再在内容里找匹配词 ——
+         类型是可选条件，不写就还是「全库找词」的老行为（老配置因此零迁移）。 */
+      type: s(m.type),
+      exclude: s(m.exclude),
+      split: s(m.split),
+      /* 数值类型默认「自动」：内容里带时长单位就按时长读，否则按普通数字读
+         （少一个要用户做选择的控件；老配置里写死的 number / duration 照旧生效） */
+      kind: oneOf(METRIC_KINDS, m.kind, "auto"),
+      pick: oneOf(METRIC_PICKS, m.pick, "last"),
+      scale: oneOf(METRIC_SCALES, m.scale, "day"),
+      /* 桶内留空 = 跟随「取值」（解析时按 metric.bucket || metric.pick 处理） */
+      bucket: METRIC_BUCKETS.some((o) => o.value === m.bucket) ? m.bucket : "",
+      decimals: Number.isFinite(dec) ? Math.max(0, Math.min(4, dec)) : 1,
+      target: target !== null && Number.isFinite(target) ? target : null,
+    };
+  };
+
+  /* 指标表归一化：丢掉没有名字的指标、彻底空的组。
+     组名允许为空（用户正在输入的那一刻），只要有成员就留着。 */
+  const normMetricGroups = (raw) => {
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((g) => g && typeof g === "object")
+      .map((g) => ({
+        name: String(g.name == null ? "" : g.name).trim(),
+        desc: typeof g.desc === "string" ? g.desc : "",
+        /* 名称允许为空：解析时用匹配词里第一个词当显示名（见 _metrics），
+           所以「只填了一个匹配词就保存」的指标不会被丢掉 */
+        items: (Array.isArray(g.items) ? g.items : [])
+          .map(normMetric)
+          .filter((m) => m.name || metricKw(m.match).length),
+      }))
+      .filter((g) => g.name || g.items.length);
+  };
 
   /* HTML 转义，用于把文本拼进 innerHTML */
   const escapeHtml = (value) =>
@@ -690,6 +810,20 @@
       this._calTabTypeFilter = new Set();
       /* 类型筛选面板是否开着 —— 重绘后据此恢复，否则勾一个就被关掉 */
       this._calTabTypeMenuOpen = false;
+      /* 指标段位（指标）：看多长一段（近 N 天，见 METRIC_SCOPES；"0" = 全部）、
+         以及用户在卡片上临时切过的尺度（指标名 → day/week/month）。
+         都只活在内存里：这是"当下想怎么看"，不是需要长期记住的偏好。 */
+      this._calTabMetricScope = METRIC_SCOPE_DEFAULT;
+      this._calTabMetricScale = {};
+      /* 指标窗口的锚点（窗口的**右端**）：null = 跟今天走（默认）。
+         顶栏的翻页挪的就是它 —— 按一次挪一个「查看范围」的步长，
+         到了今天就到尽头，再往后按不动；「今天」把它清回 null。 */
+      this._calTabMetricAnchor = null;
+      /* 指标管理弹窗（挂在 body 上，卸载时要收掉，同类型管理） */
+      this._metricModal = null;
+      /* 指标改动攒着一起落盘（同 _typesDirty 那套防抖） */
+      this._metricsDirty = false;
+      this._metricsTimer = null;
       /* 表格视图里被收起的那几天（存日期键）。只活在内存里：
          切月 / 重绘都保留，重启插件回到全展开 —— 折叠是「当下想少看点」，
          不是什么需要长期记住的偏好。 */
@@ -762,6 +896,9 @@
               color: typeof i.color === "string" && i.color ? i.color : (g.color || DEFAULT_TYPE_COLOR),
             })),
         }));
+      /* 指标表：没有就是空数组。刻意不给内置兜底 —— 凭空塞几个指标进去，
+         用户会以为插件在乱翻他的记录内容；想建的人自己到指标设置里加即可。 */
+      this.data.metricGroups = normMetricGroups(this.data.metricGroups);
       /* 旧字段清理：types 已迁移完成，dockEnabled 对应的启用开关也已移除 */
       delete this.data.types;
       delete this.data.dockEnabled;
@@ -897,6 +1034,11 @@
         this._typesModal.remove();
         this._typesModal = null;
       }
+      /* 指标管理弹窗同理（也挂在 body 上） */
+      if (this._metricModal) {
+        this._metricModal.remove();
+        this._metricModal = null;
+      }
       /* 同理回收「设置」弹窗（同样挂在 body 上） */
       if (this._settingsModal) {
         this._settingsModal.remove();
@@ -904,6 +1046,12 @@
       }
       /* 把攒着没写的类型改动补一次落盘 */
       this._flushTypes();
+      /* 指标那笔同样补一次，并清掉还没到点的落盘定时器 */
+      if (this._metricsTimer) {
+        clearTimeout(this._metricsTimer);
+        this._metricsTimer = null;
+      }
+      this._flushMetrics();
       /* 取消还没到点的重绘，避免卸载后回调再动 DOM */
       if (this._recordsRefreshTimer) {
         clearTimeout(this._recordsRefreshTimer);
@@ -996,6 +1144,10 @@
             <header class="tt-group__title">习惯设置</header>
             <div class="tt-group__card" data-tt-group="habit"></div>
           </section>
+          <section class="tt-group">
+            <header class="tt-group__title">指标设置</header>
+            <div class="tt-group__card" data-tt-group="metric"></div>
+          </section>
         </div>
       `;
       const insertCard = container.querySelector('[data-tt-group="insert"]');
@@ -1003,6 +1155,7 @@
       const calendarCard = container.querySelector('[data-tt-group="calendar"]');
       const controlCard = container.querySelector('[data-tt-group="control"]');
       const habitCard = container.querySelector('[data-tt-group="habit"]');
+      const metricCard = container.querySelector('[data-tt-group="metric"]');
 
       /* —— 插入设置：日记笔记本 —— */
       const notebookRow = this._buildRow({
@@ -1277,6 +1430,24 @@
       habitCard.appendChild(habitPick);
       this._mountHabitPicker(habitPick);
 
+      /* —— 指标设置：指标段位那份指标表（大类 + 指标）——
+         指标是可选模块，默认一张空表，所以这里只给入口和一句现状说明：
+         怎么建、怎么改都在「指标管理」弹窗里，不做第二套界面。 */
+      if (metricCard) {
+        const n = this._metrics().length;
+        metricCard.appendChild(
+          this._buildRow({
+            title: "指标管理",
+            desc: n
+              ? `已定义 ${n} 个指标。指标从记录内容里抽数值（内容里写了数字，这里就有对应的走势），可按大类与日 / 周 / 月查看。`
+              : "指标 = 从记录内容里抽出来的数值。还没建过：点右边的「管理」建一个。",
+            controlType: "button",
+            buttonText: "管理",
+            onClick: () => this._openMetricManagerModal(() => this._refreshCalendarTabs()),
+          })
+        );
+      }
+
       /* 挂载时拉取笔记本列表（传 container 让刷新落在自己这一份上，
          设置面板在设置弹窗中复用（仅此一处）；各自刷新各自那份，不互相抢 this.notebookCddl） */
       this._refreshNotebooks(container);
@@ -1320,6 +1491,14 @@
               }" type="button" data-habit-${attr}="${o.value}">${o.label}</button>`
           )
           .join("")}</span>`;
+      /* YYYY-MM-DD → 「9月1日 周二」：时间范围胶囊上的短标（与习惯页「范围」同款） */
+      const dayLabel = (s) => {
+        const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return "";
+        const d = new Date(+m[1], +m[2] - 1, +m[3]);
+        const wd = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+        return `${d.getMonth() + 1}月${d.getDate()}日 周${wd}`;
+      };
       const cfgs = this._habitTypes()
         .map((type) => {
           const cfg = this._habitConfig(type);
@@ -1337,6 +1516,94 @@
               : cfg.unit === "min"
                 ? "分钟"
                 : "次";
+          /* 时间范围行：胶囊按钮 + 自绘日历弹层 —— 直接复用习惯页「范围」那套
+             组件与样式（.north-caltab-habit-range / -rfield / -rcal 是全局类），
+             不用原生 date 输入。开合状态存 this._habitDateEdit（{type, which}），
+             弹层浏览的月份存 this._habitDateView，重排后不丢。 */
+          const dateField = (which, val) => {
+            const open =
+              this._habitDateEdit &&
+              this._habitDateEdit.type === type &&
+              this._habitDateEdit.which === which;
+            const label = val
+              ? dayLabel(val)
+              : which === "start"
+                ? "开始日期"
+                : "结束日期";
+            return `<button type="button" class="north-caltab-habit-rfield${
+              open ? " open" : ""
+            }${val ? "" : " is-empty"}" data-habit-datebtn="${which}">${escapeHtml(
+              label
+            )}</button>`;
+          };
+          const dateCal = (which, val) => {
+            const open =
+              this._habitDateEdit &&
+              this._habitDateEdit.type === type &&
+              this._habitDateEdit.which === which;
+            if (!open) return "";
+            const view =
+              this._habitDateView instanceof Date
+                ? this._habitDateView
+                : new Date();
+            const y = view.getFullYear();
+            const m = view.getMonth();
+            const selKey = String(val || "");
+            const todayKey = this._calKey(new Date());
+            const ws = this._calWeekStart();
+            const first = new Date(y, m, 1);
+            const lead =
+              ws === 1
+                ? first.getDay() === 0
+                  ? 6
+                  : first.getDay() - 1
+                : first.getDay();
+            const dim = new Date(y, m + 1, 0).getDate();
+            const WD = ["日", "一", "二", "三", "四", "五", "六"];
+            const weekHead = Array.from(
+              { length: 7 },
+              (_, i) => `<span>${WD[(ws + i) % 7]}</span>`
+            ).join("");
+            /* 网格：首行按每周起始日留出上月尾巴，末尾补下月开头 —— 与习惯页同款 */
+            const total = Math.ceil((lead + dim) / 7) * 7;
+            const start = new Date(y, m, 1 - lead);
+            let cells = "";
+            for (let i = 0; i < total; i++) {
+              const dt = new Date(start);
+              dt.setDate(start.getDate() + i);
+              const key = this._calKey(dt);
+              const cls = [];
+              if (dt.getMonth() !== m) cls.push("is-out");
+              if (key === todayKey) cls.push("is-today");
+              if (key === selKey) cls.push("is-sel");
+              cells += `<button type="button" class="${cls.join(
+                " "
+              )}" data-habit-datepick="${key}">${dt.getDate()}</button>`;
+            }
+            return `<div class="north-caltab-habit-rcal open">
+                    <div class="north-caltab-habit-rcal-head">
+                        <button type="button" class="north-caltab-habit-rcal-arrow" data-habit-datenav="prev" data-tip="上个月"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#iconLeft"></use></svg></button>
+                        <span class="north-caltab-habit-rcal-title">${y}年${m + 1}月</span>
+                        <button type="button" class="north-caltab-habit-rcal-arrow" data-habit-datenav="next" data-tip="下个月"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#iconRight"></use></svg></button>
+                    </div>
+                    <div class="north-caltab-habit-rcal-week">${weekHead}</div>
+                    <div class="north-caltab-habit-rcal-grid">${cells}</div>
+                </div>`;
+          };
+          const dateRow = `<div class="tt-habitpick__daterow">
+                    <span class="tt-habitpick__dlabel">时间范围</span>
+                    <span class="north-caltab-habit-range">${dateField(
+                      "start",
+                      cfg.start
+                    )}<span class="north-caltab-habit-range-sep">至</span>${dateField(
+            "end",
+            cfg.end
+          )}${dateCal("start", cfg.start)}${dateCal("end", cfg.end)}</span>${
+            cfg.start || cfg.end
+              ? `<button type="button" class="tt-habitpick__dclear" data-habit-dclear>不限</button>`
+              : `<span class="tt-habitpick__dnote">留空 = 一直都在</span>`
+          }
+                </div>`;
           return `<div class="tt-habitpick__cfg" data-habit-cfg="${escapeHtml(
             type
           )}" style="--tt-c:${escapeHtml(color)}">
@@ -1382,6 +1649,7 @@
                         )}
                     </span>
                 </div>
+                ${dateRow}
             </div>`;
         })
         .join("");
@@ -1392,6 +1660,80 @@
           : "");
       /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
       host.onclick = (e) => {
+        /* 时间范围：胶囊开合（再点同一个收起）—— 与习惯页「范围」同一套交互。
+           打开时让弹层先停在该字段当前日期的那个月（没设就看今天这月）。 */
+        const dateBtn = e.target.closest && e.target.closest("[data-habit-datebtn]");
+        if (dateBtn) {
+          const box = dateBtn.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const which = dateBtn.dataset.habitDatebtn === "end" ? "end" : "start";
+          const same =
+            this._habitDateEdit &&
+            this._habitDateEdit.type === type &&
+            this._habitDateEdit.which === which;
+          if (same) {
+            this._habitDateEdit = null;
+          } else {
+            const cfg = this._habitConfig(type);
+            const cur = which === "start" ? cfg.start : cfg.end;
+            const m = String(cur || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            const base = m ? new Date(+m[1], +m[2] - 1, 1) : new Date();
+            this._habitDateEdit = { type, which };
+            this._habitDateView = new Date(base.getFullYear(), base.getMonth(), 1);
+          }
+          this._mountHabitPicker(host);
+          return;
+        }
+        /* 日历弹层翻月：只动浏览月份，不改值 */
+        const dateNav = e.target.closest && e.target.closest("[data-habit-datenav]");
+        if (dateNav) {
+          const dir = dateNav.dataset.habitDatenav === "next" ? 1 : -1;
+          const view =
+            this._habitDateView instanceof Date ? this._habitDateView : new Date();
+          this._habitDateView = new Date(
+            view.getFullYear(),
+            view.getMonth() + dir,
+            1
+          );
+          this._mountHabitPicker(host);
+          return;
+        }
+        /* 选日子：写进对应那一头，弹层收起（与习惯页「选完即收」一致）。
+           另一头保持原样，所以先设开始还是先设结束都行；写反了
+           _habitSetConfig 会自动对调。 */
+        const datePick = e.target.closest && e.target.closest("[data-habit-datepick]");
+        if (datePick) {
+          const box = datePick.closest("[data-habit-cfg]");
+          const edit = this._habitDateEdit;
+          if (!box || !edit) return;
+          const key = datePick.dataset.habitDatepick || "";
+          if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+            const type = box.dataset.habitCfg;
+            const cfg = this._habitConfig(type);
+            if (edit.which === "end") cfg.end = key;
+            else cfg.start = key;
+            this._habitSetConfig(type, cfg);
+            this._refreshCalendarTabs();
+          }
+          this._habitDateEdit = null;
+          this._mountHabitPicker(host);
+          return;
+        }
+        /* 「不限」：清掉时间范围，回到一直都在 */
+        const dclear = e.target.closest && e.target.closest("[data-habit-dclear]");
+        if (dclear) {
+          const box = dclear.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          cfg.start = "";
+          cfg.end = "";
+          this._habitSetConfig(type, cfg);
+          this._mountHabitPicker(host);
+          this._refreshCalendarTabs();
+          return;
+        }
         /* 五段切换（单位 / 方向 / 周期 / 计法 / 浅档）共用一套逻辑 */
         const ATTRS = ["unit", "dir", "period", "gunit", "lv1"];
         for (const attr of ATTRS) {
@@ -1419,7 +1761,14 @@
           return;
         }
         const chip = e.target.closest && e.target.closest("[data-habit-type]");
-        if (!chip) return;
+        if (!chip) {
+          /* 点在空白处：收起可能还开着的日历弹层（别让浮层一直挂着） */
+          if (this._habitDateEdit) {
+            this._habitDateEdit = null;
+            this._mountHabitPicker(host);
+          }
+          return;
+        }
         const name = chip.dataset.habitType;
         /* 以当前设置为基础改，不依赖 DOM 顺序；Set 保序 → 习惯卡的先后＝点选先后 */
         const next = new Set(this._habitTypes());
@@ -2085,6 +2434,9 @@
           close();
           return;
         }
+        /* 这个色块可能只是「显示」用的（指标绑了类型时就是这样，颜色由类型决定），
+           要不要弹面板交给调用方定 —— 返回 false 就当按了一下，什么也不开 */
+        if (typeof options.canOpen === "function" && options.canOpen(trigger) === false) return;
         /* 同时只留一个面板 */
         if (typeof this._closeColorPicker === "function") this._closeColorPicker();
         open();
@@ -2232,6 +2584,1100 @@
       /* 打开即接管为 fixed 定位，避免首次拖动时跳一下 */
       ensurePositioned();
       this._typesModal = modal;
+    }
+
+    /* ===================== 指标（从记录内容里抽数值画折线） =====================
+       读写规则一句话：**只读记录，只写设置**。
+         · 读：记录（date / content）+ 设置里的指标表，全是纯函数，好做单测；
+         · 写：只写 data.metricGroups（插件设置），不碰文档、不加块属性。
+       所以指标随时可以删，卸载插件后用户的笔记里不会多出任何东西。
+       指标段位按「大类 → 指标 → 尺度」三层看：大类是一屏一组指标，
+       尺度（日 / 周 / 月）是同一份数据换粒度，分线（空腹 / 餐后）是同一指标的另一维。
+       ─────────────────────────────────────────────────────────── */
+
+    /* 当前生效的指标：扁平化成 [{group, metric}]，组名空着时归到「未归类」。
+       每次读都重新归一化 —— 指标表很小（几个到几十个），省掉一套缓存失效逻辑，
+       改了设置立刻就用新的。 */
+    _metrics() {
+      const out = [];
+      (this.data.metricGroups || []).forEach((g) => {
+        (g.items || []).forEach((i) => {
+          const metric = normMetric(i);
+          /* 名称留空就跟随匹配词里第一个词 —— 这样「只填一个匹配词」的指标
+             也能在指标页正常显示，不用逼用户先起名 */
+          const name = metric.name || metricKw(metric.match)[0] || "";
+          if (name) {
+            out.push({
+              group: (g.name || "").trim() || "未归类",
+              /* 颜色在这里一次性换成「生效色」（绑了类型就跟类型色）。
+                 折线 / 面积 / 图例 / 卡头色点全都读 metric.color ——
+                 只在这一处换，下游就都跟着走了，不必逐个改。 */
+              metric: Object.assign({}, metric, { name, color: this._metricColorOf(metric) }),
+            });
+          }
+        });
+      });
+      return out;
+    }
+
+    /* 指标实际生效的颜色。绑了类型就跟类型的颜色 —— 类型是「归类」，
+       它的配色在整个插件里是同一套，指标挂上去自然也该是那个色；
+       没绑类型时，才是这个指标自己挑的色。
+       类型在类型管理里被删掉或改了名就退回自己存的那个色，
+       不至于因为删了一个类型，整张卡突然变成一片灰。 */
+    _metricColorOf(metric) {
+      const m = metric || {};
+      return this._typeColorOf(m.type) || m.color || DEFAULT_TYPE_COLOR;
+    }
+
+    /* 卡片上临时切过的尺度优先，否则用指标自己配的默认尺度 */
+    _metricScaleOf(metric) {
+      const t = this._calTabMetricScale ? this._calTabMetricScale[metric.name] : "";
+      return METRIC_SCALES.some((o) => o.value === t) ? t : metric.scale;
+    }
+
+    /* 指标只认「记录」，不认「文档」数据源 —— 文档的 content 是标题，没有数值可取。
+       所以这里不看设置里的数据源，直接问记录那份缓存；还没加载过就先补一次，
+       回来后再重绘指标段位（首屏因此不会空着）。 */
+    _metricRecords() {
+      if (Array.isArray(this._lifelogDockCache)) return this._lifelogDockCache;
+      if (!this._metricLoading) {
+        this._metricLoading = true;
+        this._queryLifeLogDockRecords()
+          .then((records) => {
+            this._lifelogDockCache = records || [];
+            this._lifelogDockCacheTime = Date.now();
+            if (this._calTabView === "metric") this._refreshCalendarTabs();
+          })
+          .catch((e) => console.warn(`${NAME}：指标数据加载失败`, e))
+          .finally(() => {
+            this._metricLoading = false;
+          });
+      }
+      return [];
+    }
+
+    /* 指标可绑定的记录类型：默认「不限」，候选只列**数据里真实出现过的**类型，
+       外加这条指标自己已经存过的那个（最近没记录也还在）。
+       不让手打 —— 类型是自由文本，写偏一个字符就静默漏数据。 */
+    _metricTypeOptions(current) {
+      const names = this._calTabTypeOptions(this._metricRecords()).map((o) => o.name);
+      const cur = String(current || "").trim();
+      if (cur && names.indexOf(cur) < 0) names.unshift(cur);
+      return names.map((name) => ({ value: name, label: name }));
+    }
+
+    /* 指标看的那段日期：以锚点为右端、往前 N 天（含右端那天）；
+       N = 0 表示「全部」—— 从最早一条记录（不晚于右端）那天算起。
+       锚点默认是今天，顶栏的翻页会把它往前挪（见 _bindCalendarTab 里那条分支）。 */
+    _metricWindow(records) {
+      const anchor =
+        this._calTabMetricAnchor instanceof Date ? this._calTabMetricAnchor : new Date();
+      const to = this._calKey(anchor);
+      const days = parseInt(this._calTabMetricScope, 10);
+      if (!Number.isFinite(days) || days <= 0) {
+        let from = "";
+        (records || []).forEach((r) => {
+          const d = r && r.date;
+          if (d && d <= to && (!from || d < from)) from = d;
+        });
+        return { from: from || to, to };
+      }
+      const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+      d.setDate(d.getDate() - (days - 1));
+      return { from: this._calKey(d), to };
+    }
+
+    /* 指标段位标题里那段日期。写法与习惯视图的「范围」一致（`9月1日 ~ 11月30日`），
+       只有跨年时两头才补上年份 —— 否则「12月31日 ~ 1月5日」读不出是哪一年。 */
+    _metricRangeLabel(from, to) {
+      const p = (k) => {
+        const m = String(k || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+      };
+      const a = p(from);
+      const b = p(to);
+      if (!a || !b) return String(from || "");
+      if (a.y !== b.y) {
+        return `${a.y}年${a.m}月${a.d}日 ~ ${b.y}年${b.m}月${b.d}日`;
+      }
+      if (a.m === b.m && a.d === b.d) return `${a.m}月${a.d}日`;
+      return `${a.m}月${a.d}日 ~ ${b.m}月${b.d}日`;
+    }
+
+    /* 分桶键：日 = 日期；周 = 所在周的起始日（跟着设置里的「一周从周几开始」）；
+       月 = YYYY-MM。 */
+    _metricBucketKey(dateKey, scale) {
+      const key = String(dateKey || "");
+      const m = key.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return key;
+      if (scale === "month") return `${m[1]}-${m[2]}`;
+      if (scale === "week") {
+        const d = new Date(+m[1], +m[2] - 1, +m[3]);
+        const ws = this._calWeekStart();
+        d.setDate(d.getDate() - ((d.getDay() - ws + 7) % 7));
+        return this._calKey(d);
+      }
+      return key;
+    }
+
+    /* 桶的短标签：月 = 「9 月」；周 = 「9/22 起」；日 = 「9/22」 */
+    _metricBucketLabel(bucketKey, scale) {
+      const m = String(bucketKey).match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+      if (!m) return String(bucketKey);
+      if (scale === "month") return `${Number(m[2])} 月`;
+      return scale === "week"
+        ? `${Number(m[2])}/${Number(m[3])} 起`
+        : `${Number(m[2])}/${Number(m[3])}`;
+    }
+
+    /* 一段文本里的所有数字。三处归一化都是给真实写法准备的：
+       全角数字（中文输入法下很容易打出来）、全角小数点、
+       千分位逗号（「12,000 步」别被拆成 12 和 0）。 */
+    _metricNumbers(text) {
+      const s = String(text == null ? "" : text)
+        .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[．]/g, ".")
+        .replace(/(\d),(?=\d{3}(?:\D|$))/g, "$1");
+      const out = [];
+      const re = /-?\d+(?:\.\d+)?/g;
+      let m;
+      while ((m = re.exec(s))) {
+        const v = Number(m[0]);
+        if (Number.isFinite(v)) out.push(v);
+      }
+      return out;
+    }
+
+    /* 时长型：统一换算成小时。认「7小时30分」「7 小时」「7.5h」「7:30」「90 分钟」
+       这几种手账里常见的写法；都不认就返回 null（调用方会退回普通数字）。 */
+    _metricDuration(text) {
+      const s = String(text == null ? "" : text).replace(/[０-９]/g, (c) =>
+        String.fromCharCode(c.charCodeAt(0) - 0xfee0)
+      );
+      const hm = s.match(/(\d+(?:\.\d+)?)\s*(?:个?小时|小时|时|h|hr|hours?)/i);
+      const mm = s.match(/(\d+(?:\.\d+)?)\s*(?:分钟|分|min)/i);
+      if (hm) {
+        let v = Number(hm[1]);
+        if (mm) v += Number(mm[1]) / 60;
+        return Math.round(v * 100) / 100;
+      }
+      if (mm) return Math.round((Number(mm[1]) / 60) * 100) / 100;
+      const clock = s.match(/(?:^|\D)(\d{1,2}):(\d{2})(?!\d)/);
+      if (clock) {
+        const h = Number(clock[1]);
+        const mi = Number(clock[2]);
+        if (mi < 60 && h <= 48) return Math.round((h + mi / 60) * 100) / 100;
+      }
+      return null;
+    }
+
+    /* 一组数字按配置的取值方式收敛成一个值 */
+    _metricPick(list, how) {
+      if (!list || !list.length) return null;
+      if (how === "first") return list[0];
+      if (how === "max") return Math.max.apply(null, list);
+      if (how === "min") return Math.min.apply(null, list);
+      if (how === "sum") return list.reduce((a, b) => a + b, 0);
+      if (how === "avg") return list.reduce((a, b) => a + b, 0) / list.length;
+      return list[list.length - 1];
+    }
+
+    /* 一条记录给某个指标贡献的数值；抽不到返回 null。
+       返回值里带上命中的分线词（没配分线词、或没命中 → ""），
+       「空腹 / 餐后」这类拆线就靠它。 */
+    _metricRecordValue(rec, metric) {
+      const text = String((rec && rec.content) || "");
+      if (!text) return null;
+      /* 绑了类型就只认这个类型的记录（类型是「归类」，指标挂在归类上最自然） */
+      const wantType = String(metric.type || "").trim();
+      if (wantType && String((rec && rec.type) || "").trim() !== wantType) return null;
+      const kws = metricKw(metric.match);
+      if (kws.length && !kws.some((k) => text.includes(k))) return null;
+      const bad = metricKw(metric.exclude);
+      if (bad.length && bad.some((k) => text.includes(k))) return null;
+      const splitKws = metricKw(metric.split);
+      const split = splitKws.find((k) => text.includes(k)) || "";
+      /* 先圈出要读的那一段：配了匹配词就取第一个匹配词往后 40 个字
+         （在下一个分线词处截断 —— 「空腹血糖 5.6 餐后 7.8」写成一行的记录，
+         读空腹那条线时不能把餐后的值也卷进来）。
+         那一段里既没有数字也没有时长，才退回整条内容。 */
+      let seg = text;
+      if (kws.length) {
+        let at = -1;
+        kws.forEach((k) => {
+          const i = text.indexOf(k);
+          if (i >= 0 && (at < 0 || i < at)) at = i;
+        });
+        if (at >= 0) {
+          let end = at + 40;
+          splitKws.forEach((k) => {
+            const i = text.indexOf(k, at + 1);
+            if (i >= 0 && i < end) end = i;
+          });
+          const slice = text.slice(at, end);
+          if (this._metricNumbers(slice).length || this._metricDuration(slice) !== null) {
+            seg = slice;
+          }
+        }
+      }
+      /* 时长还是普通数字：配置写死了就照写死的读；
+         auto（默认）看这一段里有没有时长单位 —— 这样「睡眠 7小时30分」和「体重 65.5」
+         都不用用户去选一个「数值类型」 */
+      const asDuration =
+        metric.kind === "duration" ||
+        (metric.kind !== "number" &&
+          /(?:\d\s*(?:个?小时|小时|时|h|hr|hours?|分钟|分|min))|(?:\d{1,2}:\d{2}(?!\d))/i.test(seg));
+      let nums;
+      if (asDuration) {
+        const h = this._metricDuration(seg);
+        nums = h === null ? this._metricNumbers(seg) : [h];
+      } else {
+        nums = this._metricNumbers(seg);
+      }
+      if (!nums.length) return null;
+      const value = this._metricPick(nums, metric.pick);
+      return value === null ? null : { value, split };
+    }
+
+    /* 一个指标的数据点：
+         keys   —— x 轴的桶键（所有分线的并集、排序后），多条线共用一根轴
+         lines  —— [{ key, name, color, points: [{key, label, value, count}] }]
+         hits   —— 命中并抽到值的条数
+         misses —— 命中关键词却没抽到数字的条数（卡片上要提示，见 _metricCardHtml） */
+    _metricSeries(records, metric, window) {
+      const scale = this._metricScaleOf(metric);
+      const splitKws = metricKw(metric.split);
+      const kws = metricKw(metric.match);
+      const bad = metricKw(metric.exclude);
+      /* 类型不符的记录连「未取到数字」都不算 —— 它压根不是这个指标的记录 */
+      const wantType = String(metric.type || "").trim();
+      const typeOk = (rec) =>
+        !wantType || String((rec && rec.type) || "").trim() === wantType;
+      const buckets = new Map();
+      const allKeys = new Set();
+      let hits = 0;
+      let misses = 0;
+      /* 先按「日期 + 时间」升序排一遍再用。
+         记录从 SQL 来的时候是日期倒序的，而「取值 = 最后一条 / 第一条」要的是
+         **当天时间上**的最后 / 最前一条 —— 不排的话，同一天里测两次体重会取错那个。
+         顺手把区间外的剔掉，后面就不用每条都判一次。 */
+      const rows = (records || [])
+        .filter(
+          (rec) =>
+            rec &&
+            rec.date &&
+            (!window || (rec.date >= window.from && rec.date <= window.to))
+        )
+        .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+      rows.forEach((rec) => {
+        const got = this._metricRecordValue(rec, metric);
+        if (!got) {
+          /* 命中关键词却没抽到数字：单独计数。这个功能最容易被当成"插件坏了"
+             的就是这种情况，得让用户一眼能自查（卡片脚注会写出来）。 */
+          const text = String(rec.content || "");
+          const hit =
+            typeOk(rec) &&
+            (!kws.length || kws.some((k) => text.includes(k))) &&
+            !bad.some((k) => text.includes(k));
+          if (hit && text.trim()) misses++;
+          return;
+        }
+        hits++;
+        const bucketKey = this._metricBucketKey(rec.date, scale);
+        allKeys.add(bucketKey);
+        const lineKey = got.split || "";
+        if (!buckets.has(lineKey)) buckets.set(lineKey, new Map());
+        const cells = buckets.get(lineKey);
+        if (!cells.has(bucketKey)) {
+          cells.set(bucketKey, { n: 0, sum: 0, last: 0, first: 0, max: -Infinity, min: Infinity });
+        }
+        const cell = cells.get(bucketKey);
+        if (cell.n === 0) cell.first = got.value;
+        cell.n += 1;
+        cell.sum += got.value;
+        cell.last = got.value;
+        cell.max = Math.max(cell.max, got.value);
+        cell.min = Math.min(cell.min, got.value);
+      });
+      const keys = Array.from(allKeys).sort();
+      /* 按分线词在配置里写的顺序排；没带上分线词的那一组（""）放最后，
+         图例读起来就是「空腹 / 餐后 / 未标注」 */
+      const lineKeys = Array.from(buckets.keys()).sort((a, b) => {
+        if (a === b) return 0;
+        if (!a) return 1;
+        if (!b) return -1;
+        return splitKws.indexOf(a) - splitKws.indexOf(b);
+      });
+      const colors = this._metricLineColors(metric.color, lineKeys.length);
+      const lines = lineKeys.map((lineKey, idx) => ({
+        key: lineKey,
+        /* 没配分线词时，这条线的名字就是指标名（气泡里显示「体重 · 9/1 · 65.5 kg」）；
+           配了分线词、却有些记录没带上分线词的，那些点单独成一条「未标注」线 ——
+           不然图例里会出现「血糖 / 空腹 / 餐后」三条，第一条叫什么说不清 */
+        name: lineKey || (splitKws.length ? "未标注" : metric.name),
+        color: colors[idx],
+        points: Array.from(buckets.get(lineKey).keys())
+          .sort()
+          .map((bucketKey) => {
+            const cell = buckets.get(lineKey).get(bucketKey);
+            /* 桶内留空 = 跟随「取值」（同一个词管两级：一条内容里怎么取、一个桶里怎么并） */
+            let value;
+            switch (metric.bucket || metric.pick) {
+              case "first": value = cell.first; break;
+              case "avg": value = cell.sum / cell.n; break;
+              case "max": value = cell.max; break;
+              case "min": value = cell.min; break;
+              case "sum": value = cell.sum; break;
+              default: value = cell.last;
+            }
+            return {
+              key: bucketKey,
+              label: this._metricBucketLabel(bucketKey, scale),
+              value,
+              count: cell.n,
+            };
+          }),
+      }));
+      return { keys, lines, hits, misses, scale };
+    }
+
+    /* 同一指标的多条线（空腹 / 餐后）用色相旋转区分：第一条原色，
+       其余前后小幅偏移 —— 一眼看出是一家人，又不会混成一条。 */
+    _metricLineColors(base, count) {
+      const rgba =
+        parseColor(base) || parseColor(DEFAULT_TYPE_COLOR) || { r: 122, g: 173, b: 255, a: 1 };
+      const hsv = rgbToHsv(rgba);
+      const out = [];
+      for (let i = 0; i < Math.max(1, count); i++) {
+        if (i === 0) {
+          out.push(rgbaToCss({ r: rgba.r, g: rgba.g, b: rgba.b, a: 1 }));
+          continue;
+        }
+        const rgb = hsvToRgb(hsv.h + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 28, hsv.s, hsv.v);
+        out.push(rgbaToCss({ r: rgb.r, g: rgb.g, b: rgb.b, a: 1 }));
+      }
+      return out;
+    }
+
+    /* 数值的显示文本（小数位按指标配置，带单位） */
+    _metricFmt(value, metric) {
+      if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+      const text = Number(value).toFixed(metric.decimals);
+      return metric.unit ? `${text} ${metric.unit}` : text;
+    }
+
+    /* 一张折线图。坐标空间**按卡片的真实宽度来定**（见 _fitMetricCharts）：
+       SVG 里的字号会跟着 viewBox 缩放，坐标空间写死一个值的话，
+       卡片宽到 1090px 时字就涨成 24px、窄到 400px 时又缩成 5px（这坑两头都踩过）。
+       所以这里接收一个 width，图和字都按它算 —— 缩放比恒为 1:1，字号永远就是 13px 那一档。
+       另外三处是给「数值型折线」特意做的：
+         1. 纵轴不从 0 起 —— 体重 65 上下的折线从 0 起就是一条直线，这里按数据范围取；
+         2. 刻度取整数档（1 / 2 / 5 × 10^k）—— 四等分会算出 65.9 / 65.5 这种读数别扭的
+            刻度，手账本那种图都是能一眼读出来的整数；
+         3. 左边留出一条刻度带 —— 折线不从 x=0 起笔，第一个点不会压在刻度字上。 */
+    _metricChartSvg(series, metric, width) {
+      const WIDTH = Math.min(1600, Math.max(320, Math.round(width || 580)));
+      /* 高度跟着宽度走但夹在 190~320 之间：太窄了要够高才看得清折线，
+         太宽了不必跟着等比拉高（否则一屏只能塞一张卡） */
+      const HEIGHT = Math.round(Math.min(320, Math.max(190, WIDTH * 0.34)));
+      const PAD_T = 18;
+      const PAD_B = 44;
+      const PAD_L = 46;
+      const PAD_R = 10;
+      const plotH = HEIGHT - PAD_T - PAD_B;
+      const values = [];
+      series.lines.forEach((l) => l.points.forEach((p) => values.push(p.value)));
+      if (!values.length) return "";
+      let lo = Math.min.apply(null, values);
+      let hi = Math.max.apply(null, values);
+      const hasTarget = metric.target !== null && Number.isFinite(metric.target);
+      if (hasTarget) {
+        lo = Math.min(lo, metric.target);
+        hi = Math.max(hi, metric.target);
+      }
+      let span = hi - lo;
+      if (span <= 0) span = Math.abs(hi) > 1 ? Math.abs(hi) * 0.2 : 1;
+      /* 刻度步长取 1 / 2 / 5 × 10^k，再把上下界对齐到步长的整数倍 */
+      const rawStep = (span * 1.24) / 4;
+      const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+      const ratio = rawStep / mag;
+      const step = mag * (ratio <= 1 ? 1 : ratio <= 2 ? 2 : ratio <= 5 ? 5 : 10);
+      let y0 = Math.floor((lo - span * 0.12) / step) * step;
+      let y1 = Math.ceil((hi + span * 0.12) / step) * step;
+      if (!Number.isFinite(y0) || !Number.isFinite(y1) || y1 <= y0) {
+        y0 = lo - span * 0.12;
+        y1 = hi + span * 0.12;
+      }
+      const yOf = (v) => PAD_T + plotH - ((v - y0) / (y1 - y0)) * plotH;
+      const n = series.keys.length;
+      const xOf = (key) => {
+        const i = series.keys.indexOf(key);
+        return n > 1
+          ? PAD_L + ((WIDTH - PAD_L - PAD_R) * i) / (n - 1)
+          : (WIDTH + PAD_L - PAD_R) / 2;
+      };
+      const baseY = (PAD_T + plotH).toFixed(1);
+      let svg = "";
+      /* 刻度线：从 y0 到 y1 按步长铺，最多 6 条（步长很小时不至于糊成一片） */
+      const ticks = [];
+      for (let i = 0; i <= 12; i++) {
+        const v = y0 + i * step;
+        if (v > y1 + step / 1000) break;
+        ticks.push(v);
+      }
+      if (ticks.length > 6) {
+        ticks.length = 0;
+        for (let i = 0; i <= 4; i++) ticks.push(y0 + ((y1 - y0) * i) / 4);
+      }
+      ticks.forEach((v) => {
+        const y = yOf(v);
+        svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${WIDTH - PAD_R}" y2="${y.toFixed(
+          1
+        )}" stroke="var(--b3-border-color)" stroke-dasharray="4 5" stroke-width="1" opacity="0.55"/>`;
+        svg += `<text x="4" y="${(y + 4).toFixed(
+          1
+        )}" class="north-caltab-stats-axis-text">${v.toFixed(metric.decimals)}</text>`;
+      });
+      if (hasTarget) {
+        const ty = yOf(metric.target);
+        svg += `<line x1="${PAD_L}" y1="${ty.toFixed(1)}" x2="${WIDTH - PAD_R}" y2="${ty.toFixed(
+          1
+        )}" stroke="var(--b3-theme-on-surface-light)" stroke-width="1" stroke-dasharray="2 3" opacity="0.85"/>`;
+        svg += `<text x="${WIDTH - PAD_R}" y="${(ty - 5).toFixed(
+          1
+        )}" text-anchor="end" class="north-caltab-stats-axis-text">目标 ${metric.target}</text>`;
+      }
+      /* 面积先画、折线后画 —— 反过来的话折线会被自己的半透明面积盖住 */
+      series.lines.forEach((line) => {
+        if (line.points.length < 2) return;
+        const pts = line.points.map((p) => `${xOf(p.key).toFixed(1)},${yOf(p.value).toFixed(1)}`);
+        svg += `<path d="M${pts.join(" L")} L${xOf(
+          line.points[line.points.length - 1].key
+        ).toFixed(1)},${baseY} L${xOf(line.points[0].key).toFixed(1)},${baseY} Z" class="north-caltab-metric-area" style="fill:${line.color}"/>`;
+      });
+      series.lines.forEach((line) => {
+        if (!line.points.length) return;
+        const pts = line.points.map((p) => `${xOf(p.key).toFixed(1)},${yOf(p.value).toFixed(1)}`);
+        svg += `<path d="M${pts.join(
+          " L"
+        )}" class="north-caltab-metric-line" style="stroke:${line.color}"/>`;
+        line.points.forEach((p) => {
+          const cx = xOf(p.key).toFixed(1);
+          const cy = yOf(p.value).toFixed(1);
+          const tip = escapeHtml(
+            `${line.name} · ${p.label} · ${this._metricFmt(p.value, metric)}${
+              p.count > 1 ? ` · ${p.count} 条` : ""
+            }`
+          );
+          svg += `<circle cx="${cx}" cy="${cy}" r="${
+            line.points.length > 40 ? 8 : 12
+          }" fill="transparent" class="north-caltab-stats-hit" data-tip="${tip}"/>`;
+          svg += `<circle cx="${cx}" cy="${cy}" r="4" class="north-caltab-metric-dot" style="stroke:${line.color}"/>`;
+        });
+      });
+      /* x 轴标签：点多了隔几个画一个，首尾一定画；首尾改左右对齐免得被裁掉 */
+      const marks = [];
+      const stride = n > 10 ? Math.ceil(n / 6) : 1;
+      for (let i = 0; i < n; i += stride) marks.push(i);
+      if (n && marks[marks.length - 1] !== n - 1) marks.push(n - 1);
+      marks.forEach((i) => {
+        const x = xOf(series.keys[i]);
+        const anchor = i === 0 ? "start" : i === n - 1 ? "end" : "middle";
+        svg += `<text x="${x.toFixed(1)}" y="${
+          HEIGHT - 16
+        }" text-anchor="${anchor}" class="north-caltab-stats-axis-text">${escapeHtml(
+          this._metricBucketLabel(series.keys[i], series.scale)
+        )}</text>`;
+      });
+      return `<svg class="north-caltab-metric-chart" viewBox="0 0 ${WIDTH} ${HEIGHT}" role="img" aria-label="${escapeHtml(
+        metric.name
+      )}走势图">${svg}</svg>`;
+    }
+
+    /* 指标段位的主体：按大类分节，一指标一张卡；还没指标时给一句指路的空态 */
+    _buildCalendarMetricHtml() {
+      /* 指标数据暂存表：卡片里先留一个空盒子，等整屏插进 DOM、量到真实宽度，
+         再由 _fitMetricCharts 取这份数据成图（每次重绘换一份） */
+      this._metricRenderCache = new Map();
+      const all = this._metrics();
+      if (!all.length) return this._metricEmptyHtml();
+      /* 顶栏那枚「全部类型」在指标视图里也照常管用：先按选中的类型过一遍记录，
+         后面的取数、脚注统计都基于筛过之后的这一份 */
+      const picked = this._calTabTypeFilter;
+      const records = picked && picked.size
+        ? this._metricRecords().filter((r) => picked.has(String((r && r.type) || "").trim()))
+        : this._metricRecords();
+      const window = this._metricWindow(records);
+      const groups = [];
+      all.forEach((x) => {
+        let g = groups.find((it) => it.name === x.group);
+        if (!g) {
+          g = { name: x.group, items: [] };
+          groups.push(g);
+        }
+        g.items.push(x.metric);
+      });
+      const scopeSegs = METRIC_SCOPES.map(
+        (o) =>
+          `<button class="${
+            String(this._calTabMetricScope) === o.value ? "active" : ""
+          }" data-caltab-metric-scope="${o.value}">${o.label}</button>`
+      ).join("");
+      let seq = 0;
+      const sections = groups
+        .map((g) => {
+          const cards = g.items
+            .map((m) => this._metricCardHtml(m, records, window, `m${seq++}`))
+            .join("");
+          return `<div class="north-caltab-metric-group">
+              <div class="north-caltab-metric-grouphead">
+                <span class="north-caltab-metric-groupname">${escapeHtml(g.name)}</span>
+                <span class="north-caltab-metric-groupcount">${g.items.length} 个指标</span>
+              </div>
+              <div class="north-caltab-metric-cards">${cards}</div>
+            </div>`;
+        })
+        .join("");
+      /* 工具行只留「看多长」的段位：日期已经写在标题里（与习惯视图同款），
+         「管理指标」入口也不在这里重复 —— 它在「设置 · 指标设置」里，只留一处。 */
+      return `<div class="north-caltab-metric">
+          <div class="north-caltab-metric-bar">
+            <div class="north-caltab-segments north-caltab-metric-scopes">${scopeSegs}</div>
+          </div>
+          ${sections}
+        </div>`;
+    }
+
+    /* 单个指标的卡片：卡头（名称 / 最近值 / 变化 / 尺度段位）＋ 图例 ＋ 折线 ＋ 脚注。
+       折线先留一个空盒子，等整屏插进 DOM 之后由 _fitMetricCharts 按卡片真实宽度二次成图 ——
+       这里不知道卡片会渲染成多宽，写死宽度就会一会儿太大一会儿太小。 */
+    _metricCardHtml(metric, records, window, cacheKey) {
+      const series = this._metricSeries(records, metric, window);
+      const points = series.lines.reduce((n, l) => n + l.points.length, 0);
+      const scaleSegs = METRIC_SCALES.map(
+        (o) =>
+          `<button class="${
+            this._metricScaleOf(metric) === o.value ? "active" : ""
+          }" data-caltab-metric-scale="${o.value}" data-caltab-metric-name="${escapeHtml(
+            metric.name
+          )}">${o.label}</button>`
+      ).join("");
+      /* 最近值取「最后有数据的那条线」的最后一点；变化量取同一条线上一个点的差 */
+      let lastPoint = null;
+      let lineOfLast = null;
+      series.lines.forEach((l) => {
+        const p = l.points[l.points.length - 1];
+        if (p && (!lastPoint || p.key > lastPoint.key)) {
+          lastPoint = p;
+          lineOfLast = l;
+        }
+      });
+      let delta = null;
+      if (lineOfLast && lastPoint) {
+        const idx = lineOfLast.points.indexOf(lastPoint);
+        if (idx > 0) delta = lastPoint.value - lineOfLast.points[idx - 1].value;
+      }
+      /* 周 / 月的「求和」刻度下，最后那一格往往还没走完 —— 拿它跟上一格比出来的差
+         会突然很大（这周才过三天 vs 上周满七天），看着像暴跌。未走完的周期不给差值。 */
+      if (
+        delta !== null &&
+        series.scale !== "day" &&
+        lastPoint &&
+        lastPoint.key === this._metricBucketKey(this._calKey(new Date()), series.scale)
+      ) {
+        delta = null;
+      }
+      const legend =
+        series.lines.length > 1
+          ? `<div class="north-caltab-metric-legend">${series.lines
+              .map(
+                (l) =>
+                  `<span class="north-caltab-metric-legenditem"><i style="background:${
+                    l.color
+                  }"></i>${escapeHtml(l.name)}</span>`
+              )
+              .join("")}</div>`
+          : "";
+      const foot = [`${series.hits} 条记录`];
+      if (series.misses > 0) {
+        foot.push(`${series.misses} 条命中但没取到数字，可检查内容写法或「匹配词」`);
+      }
+      /* 交给二次成图：把这一个指标的数据存下，等量出卡片宽度再画 */
+      if (cacheKey && points) {
+        this._metricRenderCache.set(cacheKey, { metric, series });
+      }
+      return `<div class="north-caltab-metric-card${points ? "" : " is-empty"}">
+          <div class="north-caltab-metric-head">
+            <span class="north-caltab-metric-chipdot" style="background:${metric.color}"></span>
+            <span class="north-caltab-metric-name">${escapeHtml(metric.name)}</span>
+            ${
+              metric.type
+                ? `<span class="north-caltab-metric-type" data-tip="只统计「${escapeHtml(
+                    metric.type
+                  )}」类型的记录">${escapeHtml(metric.type)}</span>`
+                : ""
+            }
+            <span class="north-caltab-metric-last">${
+              lastPoint
+                ? `最近 <b>${Number(lastPoint.value).toFixed(metric.decimals)}</b>${
+                    metric.unit ? " " + escapeHtml(metric.unit) : ""
+                  }`
+                : "暂无数据"
+            }</span>
+            ${
+              delta === null
+                ? ""
+                : `<span class="north-caltab-metric-delta">${
+                    delta >= 0 ? "+" : ""
+                  }${delta.toFixed(metric.decimals)}</span>`
+            }
+            <div class="north-caltab-segments north-caltab-metric-scales">${scaleSegs}</div>
+          </div>
+          ${legend}
+          ${
+            points
+              ? `<div class="north-caltab-metric-chartbox" data-caltab-metric-chart="${escapeHtml(
+                  cacheKey
+                )}"></div>`
+              : `<div class="north-caltab-metric-none">这段区间里没找到「${escapeHtml(
+                  metric.match || metric.name
+                )}」的数值</div>`
+          }
+          <div class="north-caltab-metric-foot">${escapeHtml(foot.join(" · "))}</div>
+        </div>`;
+    }
+
+    /* 按每张卡的**真实宽度**逐张重画折线。
+       为什么必须二次成图：SVG 里的字号跟着 viewBox 缩放，坐标空间写死就必然
+       一头太小一头太大（实测：卡片 400px 时字号缩到 5px、1090px 时涨到 24px）。
+       这里量出卡片宽度，用同宽的坐标空间重画，缩放比就是 1:1。
+       顺带挂一个 ResizeObserver：标签页在后台创建时量不到宽度（clientWidth 为 0），
+       等它可见、或用户拖宽窗口之后再补一次 —— 与月视图对齐那套是同一个路子。 */
+    _fitMetricCharts(container) {
+      if (!container || !this._metricRenderCache) return;
+      const boxes = container.querySelectorAll("[data-caltab-metric-chart]");
+      boxes.forEach((box) => {
+        const hit = this._metricRenderCache.get(
+          box.getAttribute("data-caltab-metric-chart") || ""
+        );
+        if (!hit) return;
+        const draw = () => {
+          const w = Math.round(box.clientWidth || 0);
+          /* 量不到宽度（后台标签页）时按默认宽度先画一版，别留空 */
+          const width = w > 0 ? w : 580;
+          if (box._metricW === width && box.firstChild) return;
+          box._metricW = width;
+          box.innerHTML = this._metricChartSvg(hit.series, hit.metric, width);
+        };
+        draw();
+        if (typeof ResizeObserver === "function" && box._metricRO !== true) {
+          box._metricRO = true;
+          const ro = new ResizeObserver(() => {
+            if (!box.isConnected) {
+              ro.disconnect();
+              return;
+            }
+            draw();
+          });
+          ro.observe(box);
+        }
+      });
+    }
+
+    /* 还没有指标时的空态：与习惯视图的空态同一个样子 ——
+       一句说明 + 一枚「去设置」，点了直接落到「设置 · 指标设置」。
+       这里不摆任何操作项：建、改都在「设置 · 指标设置」里做。 */
+    _metricEmptyHtml() {
+      return `<div class="north-caltab-metric north-caltab-metric--empty">
+          <div class="north-caltab-metric-empty">
+            <div class="north-caltab-metric-empty-title">还没有指标</div>
+            <div class="north-caltab-metric-empty-desc">去「设置 → 指标设置」里建一个：填一个内容里会出现的词，就围绕它生成一个指标。</div>
+            <button class="north-caltab-metric-empty-btn" type="button" data-caltab-act="settings" data-settings-group="metric">去设置</button>
+          </div>
+        </div>`;
+    }
+
+    /* 指标改动的落盘：输入框里每敲一下都写盘太吵，攒 400ms 一起写
+       （同 _typesDirty 那套；关窗与卸载时会各补一次） */
+    _saveMetrics() {
+      this._metricsDirty = true;
+      clearTimeout(this._metricsTimer);
+      this._metricsTimer = setTimeout(() => this._flushMetrics(), 400);
+    }
+
+    _flushMetrics() {
+      if (this._metricsTimer) {
+        clearTimeout(this._metricsTimer);
+        this._metricsTimer = null;
+      }
+      if (!this._metricsDirty) return;
+      this._metricsDirty = false;
+      this._persist("保存指标");
+    }
+
+    /* 打开「指标管理」弹窗（复用类型管理那套 .tt-modal 骨架：拖拽、ESC、点遮罩关闭） */
+    _openMetricManagerModal(onClose) {
+      if (this._metricModal) {
+        this._metricModal.remove();
+        this._metricModal = null;
+      }
+      const modal = document.createElement("div");
+      modal.className = "tt-modal";
+      modal.innerHTML = `
+        <div class="tt-modal__backdrop"></div>
+        <div class="tt-modal__panel">
+          <div class="tt-modal__header">
+            <span class="tt-modal__header-title">指标管理</span>
+            <button class="tt-modal__close" type="button" aria-label="关闭">×</button>
+          </div>
+          <div class="tt-modal__body"></div>
+        </div>
+      `;
+      modal.querySelector(".tt-modal__body").appendChild(this._buildMetricSettings());
+
+      const panel = modal.querySelector(".tt-modal__panel");
+      const header = modal.querySelector(".tt-modal__header");
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let baseLeft = 0;
+      let baseTop = 0;
+
+      const ensurePositioned = () => {
+        if (panel.style.position === "fixed") return;
+        const r = panel.getBoundingClientRect();
+        panel.style.position = "fixed";
+        panel.style.margin = "0";
+        panel.style.left = r.left + "px";
+        panel.style.top = r.top + "px";
+      };
+      const onMove = (e) => {
+        if (!dragging) return;
+        let nx = baseLeft + (e.clientX - startX);
+        let ny = baseTop + (e.clientY - startY);
+        nx = Math.max(8, Math.min(nx, window.innerWidth - panel.offsetWidth - 8));
+        ny = Math.max(8, Math.min(ny, window.innerHeight - panel.offsetHeight - 8));
+        panel.style.left = nx + "px";
+        panel.style.top = ny + "px";
+      };
+      const onUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        header.classList.remove("tt-modal__header--dragging");
+        document.body.style.userSelect = "";
+      };
+      header.addEventListener("mousedown", (e) => {
+        if (e.target.closest(".tt-modal__close")) return;
+        ensurePositioned();
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        baseLeft = panel.getBoundingClientRect().left;
+        baseTop = panel.getBoundingClientRect().top;
+        header.classList.add("tt-modal__header--dragging");
+        document.body.style.userSelect = "none";
+        e.preventDefault();
+      });
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      const onKey = (e) => {
+        if (e.key === "Escape") close();
+      };
+      const close = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.removeEventListener("keydown", onKey, true);
+        /* 取色面板挂在 body 上，不随弹窗销毁，得手动收掉 */
+        if (typeof this._closeColorPicker === "function") this._closeColorPicker();
+        modal.remove();
+        if (this._metricModal === modal) this._metricModal = null;
+        /* 关窗前把攒着的改动落盘，再通知调用方重绘指标段位 */
+        this._flushMetrics();
+        if (typeof onClose === "function") {
+          try {
+            onClose();
+          } catch (e) {
+            console.warn(`${NAME}：指标管理关闭回调失败`, e);
+          }
+        }
+      };
+      document.addEventListener("keydown", onKey, true);
+      modal.querySelector(".tt-modal__backdrop").addEventListener("click", close);
+      modal.querySelector(".tt-modal__close").addEventListener("click", close);
+      document.body.appendChild(modal);
+      ensurePositioned();
+      this._metricModal = modal;
+    }
+
+    /* 指标管理面板：大类（一个盒子）＋ 盒子里若干指标卡片。
+       极简优先 —— 一张卡默认只露两样：**匹配词**（唯一必填，填一个词就能用）和
+       「更多」开关（名称、单位、目标值、小数位、分线词、排除词、取值、桶内、尺度都在里面）。
+       已经设过高级项的老配置会自动展开那一张卡，免得用户以为设置丢了。
+       数值类型不再让人选：解析时自动判断（内容里带「小时 / 分钟」这类时长单位就按时长读）。 */
+    _buildMetricSettings() {
+      const wrap = document.createElement("div");
+      wrap.className = "tt-metrics";
+      wrap.innerHTML = `
+        <div class="tt-metrics__intro">填一个内容里会出现的词，就围绕它生成一个指标。其余设置收在「更多」里，按需展开。</div>
+        <div class="tt-metrics__groups"></div>
+        <button class="tt-metrics__group-add" type="button"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconAdd"></use></svg> 添加大类</button>
+        <div class="tt-metrics__hint">改动即时保存；关掉这个窗口后指标段位会刷新。</div>
+      `;
+      const groupsEl = wrap.querySelector(".tt-metrics__groups");
+
+      const segRow = (label, options, current, onPick) => {
+        const row = document.createElement("div");
+        row.className = "tt-metrics__field";
+        row.innerHTML = `<span class="tt-metrics__label">${label}</span><span class="tt-metrics__seg"></span>`;
+        const seg = row.querySelector(".tt-metrics__seg");
+        options.forEach((o) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "tt-metrics__segbtn" + (o.value === current ? " on" : "");
+          btn.textContent = o.label;
+          btn.addEventListener("click", () => {
+            seg
+              .querySelectorAll(".tt-metrics__segbtn")
+              .forEach((b) => b.classList.remove("on"));
+            btn.classList.add("on");
+            onPick(o.value);
+          });
+          seg.appendChild(btn);
+        });
+        return row;
+      };
+
+      const metricEl = (metric, gi, mi) => {
+        /* 卡片上拿到的是**原始**配置对象，字段可能压根没写过（新建的指标只有 match）。
+           所以显示值与「算不算高级项」都先过一遍归一化，免得出现空高亮、
+           或者 小数位 显示成 undefined。改的仍是原对象。 */
+        const nm = normMetric(metric);
+        const el = document.createElement("div");
+        el.className = "tt-metrics__item";
+        el.innerHTML = `
+          <div class="tt-metrics__item-head">
+            <button type="button" class="tt-metrics__item-color" title="指标颜色"></button>
+            <input type="text" class="tt-metrics__item-kw" data-f="match" placeholder="匹配词：内容里出现的词" />
+            <button type="button" class="tt-metrics__item-more">更多</button>
+            <button class="tt-metrics__item-remove" type="button" title="删除该指标"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconMin"></use></svg></button>
+          </div>
+          <div class="tt-metrics__item-extra" hidden>
+            <div class="tt-metrics__item-row">
+              <input type="text" class="tt-metrics__item-name" placeholder="名称（留空跟随匹配词）" maxlength="12" />
+              <input type="text" class="tt-metrics__item-unit" placeholder="单位" maxlength="8" />
+              <input type="text" class="tt-metrics__item-target" placeholder="目标值" />
+              <label class="tt-metrics__decimals"><span>小数位</span><input type="number" class="tt-metrics__item-dec" min="0" max="4" step="1" /></label>
+            </div>
+            <div class="tt-metrics__item-row">
+              <input type="text" class="tt-metrics__item-split" placeholder="分线词：按它拆成多条线" />
+              <input type="text" class="tt-metrics__item-exclude" placeholder="排除词：出现就跳过" />
+            </div>
+            <div class="tt-metrics__item-segs"></div>
+          </div>
+        `;
+        const colorBtn = el.querySelector(".tt-metrics__item-color");
+        const matchInput = el.querySelector('[data-f="match"]');
+        const moreBtn = el.querySelector(".tt-metrics__item-more");
+        const extra = el.querySelector(".tt-metrics__item-extra");
+        const nameInput = el.querySelector(".tt-metrics__item-name");
+        const unitInput = el.querySelector(".tt-metrics__item-unit");
+        const targetInput = el.querySelector(".tt-metrics__item-target");
+        const decInput = el.querySelector(".tt-metrics__item-dec");
+        const splitInput = el.querySelector(".tt-metrics__item-split");
+        const excludeInput = el.querySelector(".tt-metrics__item-exclude");
+        const removeBtn = el.querySelector(".tt-metrics__item-remove");
+
+        /* 绑了类型时这个色块只是「显示」类型色：点了也不该能改 ——
+           改了不会生效，让人白忙一场。要换颜色请去「设置 · 类型管理」改类型色。 */
+        const picker = this._initColorPicker(colorBtn, {
+          color: this._metricColorOf(metric),
+          onChange: (hex) => {
+            metric.color = hex;
+            this._saveMetrics();
+          },
+          canOpen: () => {
+            /* 判据跟色块的「跟随态」一致：**颜色确实由类型决定**才拦。
+               绑的类型在类型表里查不到色（没配过 / 被删了）时，颜色还是指标自己的，
+               那就照旧让人改 —— 否则会出现「显示的是我的色、却点不动」的怪事。 */
+            const typeColor = this._typeColorOf(metric.type);
+            if (!typeColor) return true;
+            showMessage(`${NAME}：颜色跟随类型「${String(metric.type).trim()}」，改颜色请到「设置 · 类型管理」`);
+            return false;
+          },
+        });
+        /* 色块跟着类型一起换：留空时画自己的色、可点；绑了类型就画类型色、去掉可点的样子 */
+        const syncMetricColor = () => {
+          const typeColor = this._typeColorOf(metric.type);
+          colorBtn.classList.toggle("is-follow", !!typeColor);
+          picker.setColor(typeColor || metric.color || DEFAULT_TYPE_COLOR);
+          colorBtn.title = typeColor
+            ? `跟随类型「${String(metric.type).trim()}」的颜色`
+            : "指标颜色";
+        };
+        /* 类型（可选）：**先选类型，再在这个类型的内容里找匹配词** ——
+           与记录结构「时间 类型：内容」对齐。不选就是「不限类型」，
+           行为与加类型之前完全一致（老配置没有这个字段，一并走这条）。 */
+        const typeCddl = this._buildCddl({
+          options: [{ value: "", label: "不限类型" }].concat(this._metricTypeOptions(nm.type)),
+          value: nm.type,
+          placeholder: "不限类型",
+          onChange: (v) => {
+            metric.type = v;
+            this._saveMetrics();
+            /* 一选完就换色 —— 不然要关窗重开才看得到 */
+            syncMetricColor();
+          },
+        });
+        typeCddl.classList.add("tt-metrics__item-type");
+        matchInput.parentNode.insertBefore(typeCddl, matchInput);
+        syncMetricColor();
+
+        /* 让「新建后聚焦到匹配词」找得到这个输入框 */
+        matchInput._metric = metric;
+        matchInput.value = nm.match;
+        nameInput.value = nm.name;
+        unitInput.value = nm.unit;
+        targetInput.value = nm.target === null ? "" : String(nm.target);
+        decInput.value = String(nm.decimals);
+        splitInput.value = nm.split;
+        excludeInput.value = nm.exclude;
+
+        /* 设过高级项的（排除词 / 分线词 / 目标 / 小数位 / 尺度 / 桶内）默认展开，
+           否则用户打开管理窗口会以为自己的配置丢了 */
+        const advanced =
+          !!nm.exclude ||
+          !!nm.split ||
+          nm.target !== null ||
+          nm.decimals !== 1 ||
+          nm.scale !== "day" ||
+          !!nm.bucket;
+        if (advanced) extra.hidden = false;
+        moreBtn.classList.toggle("on", advanced);
+        moreBtn.addEventListener("click", () => {
+          extra.hidden = !extra.hidden;
+          moreBtn.classList.toggle("on", !extra.hidden);
+        });
+
+        /* 字段都直接改属性对象（就是 data.metricGroups 里的那个），攒 400ms 一起落盘 */
+        const bind = (input, key, read) => {
+          input.addEventListener("input", () => {
+            metric[key] = read ? read(input) : input.value.trim();
+            this._saveMetrics();
+          });
+        };
+        bind(matchInput, "match");
+        bind(nameInput, "name");
+        bind(unitInput, "unit");
+        bind(splitInput, "split");
+        bind(excludeInput, "exclude");
+        bind(targetInput, "target");
+        bind(decInput, "decimals", (inp) => {
+          const n = Math.round(Number(inp.value));
+          return Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : 1;
+        });
+        removeBtn.addEventListener("click", () => {
+          this.data.metricGroups[gi].items.splice(mi, 1);
+          this._saveMetrics();
+          render();
+        });
+
+        const segs = el.querySelector(".tt-metrics__item-segs");
+        segs.appendChild(
+          segRow("取值", METRIC_PICKS, nm.pick, (v) => {
+            metric.pick = v;
+            this._saveMetrics();
+          })
+        );
+        segs.appendChild(
+          segRow(
+            "桶内",
+            [{ value: "", label: "跟随取值" }].concat(METRIC_BUCKETS),
+            nm.bucket,
+            (v) => {
+              metric.bucket = v;
+              this._saveMetrics();
+            }
+          )
+        );
+        segs.appendChild(
+          segRow("尺度", METRIC_SCALES, nm.scale, (v) => {
+            metric.scale = v;
+            this._saveMetrics();
+          })
+        );
+        return el;
+      };
+
+      const groupEl = (group, gi) => {
+        const el = document.createElement("div");
+        el.className = "tt-metrics__group";
+        el.innerHTML = `
+          <div class="tt-metrics__group-head">
+            <input type="text" class="tt-metrics__group-name" placeholder="大类名，可留空" maxlength="12" />
+            <button class="tt-metrics__group-remove" type="button" title="删除大类"><svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><use xlink:href="#iconMin"></use></svg></button>
+          </div>
+          <div class="tt-metrics__group-items"></div>
+          <button class="tt-metrics__item-add" type="button"><svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#iconAdd"></use></svg> 添加指标</button>
+        `;
+        const nameInput = el.querySelector(".tt-metrics__group-name");
+        const itemsEl = el.querySelector(".tt-metrics__group-items");
+        nameInput.value = group.name || "";
+        nameInput.addEventListener("input", () => {
+          group.name = nameInput.value.trim();
+          this._saveMetrics();
+        });
+        el.querySelector(".tt-metrics__group-remove").addEventListener("click", () => {
+          this.data.metricGroups.splice(gi, 1);
+          this._saveMetrics();
+          render();
+        });
+        el.querySelector(".tt-metrics__item-add").addEventListener("click", () => {
+          if (!Array.isArray(group.items)) group.items = [];
+          const fresh = normMetric({ match: "", color: this._pickFreeMetricColor() });
+          group.items.push(fresh);
+          this._saveMetrics();
+          /* 新建即聚焦到匹配词 —— 这是整张卡唯一必填的一项 */
+          render(fresh);
+        });
+        (group.items || []).forEach((m, mi) => {
+          if (!m.color) m.color = this._pickFreeMetricColor();
+          itemsEl.appendChild(metricEl(m, gi, mi));
+        });
+        return el;
+      };
+
+      const render = (focusMetric) => {
+        groupsEl.replaceChildren();
+        if (!Array.isArray(this.data.metricGroups)) this.data.metricGroups = [];
+        this.data.metricGroups.forEach((g, gi) => groupsEl.appendChild(groupEl(g, gi)));
+        if (focusMetric) {
+          groupsEl.querySelectorAll('[data-f="match"]').forEach((inp) => {
+            if (inp._metric === focusMetric) inp.focus();
+          });
+        }
+      };
+      render();
+
+      wrap.querySelector(".tt-metrics__group-add").addEventListener("click", () => {
+        if (!Array.isArray(this.data.metricGroups)) this.data.metricGroups = [];
+        const fresh = normMetric({ match: "", color: this._pickFreeMetricColor() });
+        this.data.metricGroups.push({ name: "", desc: "", items: [fresh] });
+        this._saveMetrics();
+        render(fresh);
+      });
+      return wrap;
+    }
+
+    /* 新指标 / 新大类的默认色：避开指标表里已经用掉的颜色（同 _pickFreeColor） */
+    _pickFreeMetricColor() {
+      const used = new Set(
+        this._metrics().map((x) => String(x.metric.color || "").toLowerCase())
+      );
+      for (const c of PALETTE) {
+        if (!used.has(c.toLowerCase())) return c;
+      }
+      return PALETTE[used.size % PALETTE.length] || DEFAULT_TYPE_COLOR;
     }
 
     /* ===================== 习惯分组管理 ===================== */
@@ -2453,7 +3899,7 @@
 
        层级刻意比类型管理弹窗（.tt-modal，9999）低 —— 设置里的「类型管理」
        按钮会在这个弹窗之上再开一层，不能被盖住。 */
-    _openSettingsModal() {
+    _openSettingsModal(groupKey) {
       /* 同时只允许一个实例 */
       if (this._settingsModal) {
         this._settingsModal.remove();
@@ -2471,6 +3917,7 @@
         { key: "calendar", label: "日历设置", icon: "iconCalendar" },
         { key: "control", label: "控制设置", icon: "iconSettings" },
         { key: "habit", label: "习惯设置", icon: "iconStar" },
+        { key: "metric", label: "指标设置", icon: "iconGraph" },
       ];
       const modal = document.createElement("div");
       modal.className = "tt-settings-modal";
@@ -2504,7 +3951,9 @@
 
       const navItems = modal.querySelectorAll("[data-settings-group]");
       const searchEl = modal.querySelector(".tt-settings-modal__search");
-      let activeKey = GROUPS[0].key;
+      /* 打开时可以指定落到哪一分区：指标空态里的「去设置」直接落到「指标设置」，
+         不必让用户再从第一页翻过去（传进来的 key 不合法就还是第一页） */
+      let activeKey = GROUPS.some((g) => g.key === groupKey) ? groupKey : GROUPS[0].key;
 
       /* 切到某个分组：只显示它、其余整体隐藏。
          同时把可能被搜索改过的行显示状态恢复回来（搜索是按行打的 display:none）。 */
@@ -2607,13 +4056,22 @@
 
     /* 类型 → 颜色；未收录使用默认灰 */
     _colorOf(type) {
+      return this._typeColorOf(type) || DEFAULT_TYPE_COLOR;
+    }
+
+    /* 按名字在类型表里找颜色；**表里没有这个名字就返回空串**。
+       单独拆出来是为了让调用方能区分「查不到」与「查到了、就是默认灰」：
+       指标跟类型色这件事上，这个区别决定了「跟不跟」（见 _metricColorOf）。 */
+    _typeColorOf(type) {
+      const name = String(type == null ? "" : type).trim();
+      if (!name) return "";
       for (const g of this.data.typeGroups || []) {
         const hit = (g.items || []).find(
-          (i) => i.name === type && typeof i.color === "string" && i.color
+          (i) => i.name === name && typeof i.color === "string" && i.color
         );
         if (hit) return hit.color;
       }
-      return DEFAULT_TYPE_COLOR;
+      return "";
     }
 
     /* 构造类型管理的设置面板：分组 + 分组描述 + 内联类型芯片 */
@@ -2801,9 +4259,13 @@
           .filter((i) => i && i.name)
           .map((i) => ({ name: i.name, color: i.color })),
       }));
-      this.saveData(DATA_KEY, Object.assign({}, this.data, { typeGroups: groups })).catch((e) =>
-        console.warn(`${NAME}：${tag}失败`, e)
-      );
+      /* 指标表一起归一化后再落盘：没名字的指标（用户正在输入的中间态）会被丢掉，
+         免得存进一份带空名的配置，下次打开弹窗多出一个无名卡片 */
+      const metricGroups = normMetricGroups(this.data.metricGroups);
+      this.saveData(
+        DATA_KEY,
+        Object.assign({}, this.data, { typeGroups: groups, metricGroups })
+      ).catch((e) => console.warn(`${NAME}：${tag}失败`, e));
     }
 
     /* 把攒着的改动落盘（关窗、插件卸载时用）。
@@ -3509,9 +4971,12 @@
     /* 筛选面板里能选的类型：取日历数据里**实际出现过**的类型，带各自配色。
        只列出现过的 —— 选一个一条记录都没有的类型没有意义。
        数据还没加载完时退回配置里的全部类型，免得面板空着。 */
-    _calTabTypeOptions() {
+    _calTabTypeOptions(records) {
       const count = new Map();
-      (this._calSourceRecords() || []).forEach((r) => {
+      /* 默认用当前「日历数据源」的记录；指标视图会把它自己那份记录传进来 ——
+         指标固定读记录（不看数据源设置），筛选项也得跟着同一份数据，否则出现
+         「筛选项里有、指标上却筛不出」的错位 */
+      (Array.isArray(records) ? records : this._calSourceRecords() || []).forEach((r) => {
         const t = ((r && r.type) || "").trim();
         if (t) count.set(t, (count.get(t) || 0) + 1);
       });
@@ -3660,6 +5125,12 @@
         if (p === "week") return before ? "上一周" : "下一周";
         if (p === "year") return before ? "上一年" : "下一年";
         return before ? "上个月" : "下个月";
+      }
+      /* 指标视图按「查看范围」的步长挪窗口，提示语就把步长写出来 */
+      if (view === "metric") {
+        const days = parseInt(this._calTabMetricScope, 10);
+        const n = Number.isFinite(days) && days > 0 ? days : 30;
+        return before ? `往前 ${n} 天` : `往后 ${n} 天`;
       }
       if (view === "week") return before ? "上一周" : "下一周";
       /* 习惯视图按自己选的周期翻：日 / 周 / 月 / 范围各有各的步长，
@@ -3919,22 +5390,61 @@
             <div class="north-caltab-stats-rhythm-hint">✨ ${peakLabel} 是你的记录高峰 —— ${periodName}共有 ${pk.cnt} ${unit}诞生于这天，占${scopeName} ${peakPct}%</div>`
           : `<div class="north-caltab-stats-empty">这段周期还没有记录，记下第一条就能看到走势了</div>`;
 
-      /* ==================== 类型分布：胶囊芯片网格 ====================
-         一枚芯片 = 色点 + 类型名 + 记录条数，一行数枚自动换行；
-         纯展示不可点，悬停气泡显示该类型的累计用时。 */
+      /* ==================== 类型分布：环形图 + 胶囊芯片图例 ====================
+         环形图扇区按条数占比、用类型自身配色（与全插件色彩体系一致），
+         中心放总数；悬停扇区看条数 / 占比 / 用时。
+         旁边的芯片就是图例：值直接标占比%，条数与用时进悬停气泡 ——
+         数据全部来自上面那份 typeRows，不另起第二套口径。 */
+      const unitShort = unit.replace(/记录$|文档$/, "");
+      const typeTotal = typeRows.reduce((s, t) => s + t.cnt, 0);
+      /* 环形几何：stroke-dasharray 画弧 —— 每段弧长 = 占比 × 周长（再扣 2px 缝），
+         dashoffset 依次前移累出首尾相接；rotate(-90) 让 0% 从顶部起，
+         只有 1 个类型时不留缝（一整圈就是一个颜色）。 */
+      const DONUT_S = 120;
+      const DONUT_C = DONUT_S / 2;
+      const DONUT_R = 44;
+      const DONUT_CIRC = 2 * Math.PI * DONUT_R;
+      const DONUT_GAP = typeRows.length > 1 ? 2 : 0;
+      let donutAcc = 0;
+      const donutSegs = typeRows
+        .map((t) => {
+          const frac = typeTotal > 0 ? t.cnt / typeTotal : 0;
+          const len = Math.max(0, frac * DONUT_CIRC - DONUT_GAP);
+          const seg = `<circle cx="${DONUT_C}" cy="${DONUT_C}" r="${DONUT_R}" fill="none" stroke="${
+            t.color
+          }" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(
+            DONUT_CIRC - len
+          ).toFixed(2)}" stroke-dashoffset="${(-donutAcc).toFixed(
+            2
+          )}" class="north-caltab-stats-donut-seg" data-tip="${escapeHtml(
+            `${t.name} · ${t.cnt} ${unit} · ${(frac * 100).toFixed(1)}% · 用时 ${this._fmtStatsDur(t.min)}`
+          )}"></circle>`;
+          donutAcc += frac * DONUT_CIRC;
+          return seg;
+        })
+        .join("");
+      const donutHtml = `<div class="north-caltab-stats-donut">
+            <svg viewBox="0 0 ${DONUT_S} ${DONUT_S}" role="img" aria-label="类型占比环形图">
+                <g transform="rotate(-90 ${DONUT_C} ${DONUT_C})">${donutSegs}</g>
+            </svg>
+            <div class="north-caltab-stats-donut-center"><b>${typeTotal}</b><span>${
+              unitShort || unit
+            }</span></div>
+        </div>`;
       const typeChipsHtml = typeRows
         .map((t) => {
+          const pct = typeTotal > 0 ? ((t.cnt / typeTotal) * 100).toFixed(1) : "0.0";
           return `<div class="north-caltab-stats-chip" data-tip="${escapeHtml(
-            `${t.name} · 用时 ${this._fmtStatsDur(t.min)}`
+            `${t.name} · ${t.cnt} ${unit} · 用时 ${this._fmtStatsDur(t.min)}`
           )}">
                 <i class="north-caltab-stats-chip-dot" style="background:${t.color}"></i>
                 <span class="north-caltab-stats-chip-name">${escapeHtml(t.name)}</span>
-                <span class="north-caltab-stats-chip-val">${t.cnt} ${unit}</span>
+                <span class="north-caltab-stats-chip-val">${pct}%</span>
             </div>`;
         })
         .join("");
       const typesBody = typeRows.length
-        ? `<div class="north-caltab-stats-chips">${typeChipsHtml}</div>`
+        ? `<div class="north-caltab-stats-typedist">${donutHtml}<div class="north-caltab-stats-chips">${typeChipsHtml}</div></div>`
         : `<div class="north-caltab-stats-empty">这一段还没有带类型的记录</div>`;
 
       /* 卡片区块：区块头左标题、右副题、下有分隔线（后续各区块共用） */
@@ -4051,7 +5561,6 @@
          单元格「占比% + 条数」并列（占比按全年总数算），空格画「-」，
          tfoot 一行「总计」。年内没有记录时整个区块不渲染。 */
       const NO_TYPE = "(无类型)";
-      const unitShort = unit.replace(/记录$|文档$/, "");
       const detailMap = {};
       let detailYearTotal = 0;
       this._calTabFilteredRecords().forEach((r) => {
@@ -4781,7 +6290,21 @@
          让每个习惯自己决定要不要加深 —— 不影响别的习惯。 */
       const lv1 = raw.lv1 === "mid" || raw.lv1 === "deep" ? raw.lv1 : "";
 
-      return { unit, dir, period, goalUnit, goal, alias, group, lv1 };
+      /* 时间范围：YYYY-MM-DD 字符串，一头没填 = 那头不限；两头都没填 = 一直都在。
+         写反了（开始晚于结束）自动对调；老配置没有这两个字段，读出来就是空 —— 零迁移。 */
+      const mkDay = (s) => {
+        const m = String(s == null ? "" : s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+      };
+      let start = mkDay(raw.start);
+      let end = mkDay(raw.end);
+      if (start && end && start > end) {
+        const t = start;
+        start = end;
+        end = t;
+      }
+
+      return { unit, dir, period, goalUnit, goal, alias, group, lv1, start, end };
     }
 
     /* 写回某个习惯的目标模型（_persist 存的是整份 settings，新键自动落盘）。
@@ -4789,6 +6312,18 @@
     _habitSetConfig(type, cfg) {
       const all = Object.assign({}, this.data.habitConfig || {});
       const g = +cfg.goal;
+      /* 时间范围：只认 YYYY-MM-DD，写反自动对调，非法值当「不限」 */
+      const mkDay = (s) => {
+        const m = String(s == null ? "" : s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+      };
+      let start = mkDay(cfg.start);
+      let end = mkDay(cfg.end);
+      if (start && end && start > end) {
+        const t = start;
+        start = end;
+        end = t;
+      }
       all[type] = {
         unit: cfg.unit === "min" ? "min" : "count",
         dir: cfg.dir === "bad" ? "bad" : "good",
@@ -4800,6 +6335,8 @@
         alias: String(cfg.alias == null ? "" : cfg.alias).trim(),
         group: String(cfg.group == null ? "" : cfg.group).trim(),
         lv1: cfg.lv1 === "mid" || cfg.lv1 === "deep" ? cfg.lv1 : "",
+        start,
+        end,
       };
       this.data.habitConfig = all;
       this._persist("保存习惯目标");
@@ -5079,8 +6616,11 @@
     /* 某类型一年里每天的表现：{ days: {日期键: {cnt, min}}, totalCnt, totalMin }
        时长口径就是上面那份缓存（= _calDayRows，跟着「时间计算模式」走：
        显式区间优先，结束模式算「上一条 → 本条」，开始模式算「本条 → 下一条」），
-       再按类型挑出属于这个习惯的行。 */
+       再按类型挑出属于这个习惯的行。
+       时间范围也在这里一处拦：范围外的记录直接不算 —— 热力图、连续、总计、
+       周 / 月卡全都吃这份数据，改这一处就够，不会出现两套口径。 */
     _habitYearData(type, year) {
+      const cfg = this._habitConfig(type);
       const map = this._habitRowsByDate(year);
       const days = {};
       let totalCnt = 0;
@@ -5091,6 +6631,7 @@
         map[key].forEach((row) => {
           const t = row.record && row.record.type ? String(row.record.type).trim() : "";
           if (t !== type) return;
+          if (this._habitOffState(cfg, key)) return;
           cnt += 1;
           min += row.dur || 0;
         });
@@ -5108,6 +6649,15 @@
       const r = days[key];
       if (!r) return 0;
       return cfg.unit === "min" ? r.min || 0 : r.cnt || 0;
+    }
+
+    /* 某天在不在习惯的时间范围内：0 = 在范围内（或没设范围），
+       -1 = 还没开始，1 = 已结束。日期键是 YYYY-MM-DD，字符串直接比大小就是对的。
+       只用来做**展示**（压淡格子 / 改气泡）—— 统计过滤在 _habitYearData 里做。 */
+    _habitOffState(cfg, key) {
+      if (cfg.start && key < cfg.start) return -1;
+      if (cfg.end && key > cfg.end) return 1;
+      return 0;
     }
 
     /* 一段周期（从 start 起 len 天）的累计：合计型累计次数 / 分钟，
@@ -5393,19 +6943,36 @@
         `<span class="north-caltab-habit-avatar" style="--tt-c:${escapeHtml(
           color
         )}">${escapeHtml((label || "?").slice(0, 1))}</span>`;
+      /* 时间范围状态徽标：「今天」落在范围外就直说（未开始 / 已结束），
+         让「今日完成 x/y」里那枚没打勾的卡有处可查；没设范围不占位。 */
+      const rangeBadge = (cfg) => {
+        if (!cfg.start && !cfg.end) return "";
+        if (cfg.start && todayKey < cfg.start)
+          return `<span class="north-caltab-habit-rbadge">未开始</span>`;
+        if (cfg.end && todayKey > cfg.end)
+          return `<span class="north-caltab-habit-rbadge">已结束</span>`;
+        return "";
+      };
       /* 打卡点阵共用的单格内容与气泡：实心格里直接显示当天的记录条数
          （1 条也显示 1，多条显示 2、3…），其余信息（时长 / 达标情况）
-         交给悬停气泡 —— 格子上只留一眼能读的。 */
-      const dotCell = (dt, raw, cls, key) => {
+         交给悬停气泡 —— 格子上只留一眼能读的。
+         传了 cfg（目标模型）就顺带认「时间范围」：范围外的日子压淡，
+         气泡直说「未开始 / 已结束」，不冒充「未记录」。 */
+      const dotCell = (dt, raw, cls, key, cfg) => {
         const isFuture = dt > now;
         const all = cls.slice();
         if (raw && raw.cnt > 1) all.push("is-count");
         else if (raw) all.push("is-done");
         if (isFuture) all.push("is-future");
         if (key === todayKey) all.push("is-today");
-        const tip = raw
+        let tip = raw
           ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
           : `${key} · 未记录`;
+        const off = cfg ? this._habitOffState(cfg, key) : 0;
+        if (off) {
+          all.push("is-off");
+          tip = `${key} · ${off < 0 ? "未开始" : "已结束"}`;
+        }
         const inner = raw ? `${raw.cnt}` : "";
         return `<div class="${all.join(
           " "
@@ -5613,8 +7180,21 @@
         const cellInfo = (dt) => {
           const key = this._calKey(dt);
           const raw = days[key];
-          const v = dayVal(dt);
+          const off = this._habitOffState(cfg, key);
+          const v = off ? 0 : dayVal(dt);
           let cum = cfg.goalUnit === "days" ? (v > 0 ? 1 : 0) : v;
+          if (off) {
+            /* 范围外的日子不参与累计，气泡直说状态，不冒充「未达标」 */
+            return {
+              key,
+              raw,
+              v,
+              cum,
+              lvl: 0,
+              off,
+              tip: `${key} · ${off < 0 ? "未开始" : "已结束"}`,
+            };
+          }
           if (cfg.period === "week") {
             for (
               let d = new Date(this._calTabWeekStartDate(dt));
@@ -5644,7 +7224,7 @@
                 ? "达标"
                 : "未达标"
               : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
-          return { key, raw, v, cum, lvl, tip: `${tip} · ${tipTail}` };
+          return { key, raw, v, cum, lvl, off: 0, tip: `${tip} · ${tipTail}` };
         };
 
         /* —— 非年周期的格子区（年热力走下面原有的那段） ——
@@ -5665,6 +7245,8 @@
               cfg.unit === "min" ? this._fmtStatsDur(info.v) : `${fmtN(info.v)}`;
             cells += `<div class="north-caltab-habit-rcell${
               info.lvl ? " tt-lv" + info.lvl : ""
+            }${
+              info.off ? " is-off" : ""
             }${
               dt > now ? " is-future" : ""
             }"${lv1Attr(info.lvl)} data-caltab-habitday="${
@@ -5764,9 +7346,12 @@
               continue;
             }
             const key = this._calKey(dt);
+            /* 时间范围外的日子：压淡 + 气泡直说状态（数据已在 _habitYearData 拦过，
+               这里只管展示） */
+            const off = this._habitOffState(cfg, key);
             /* raw = 当天的记录对象（tip 用它的次数 / 分钟）；v = 目标模型的成绩值 */
             const raw = days[key];
-            const v = dayVal(dt);
+            const v = off ? 0 : dayVal(dt);
             /* 周期累计：周目标按周重置、月目标按月重置（日目标用不到） */
             if (cfg.period === "week") {
               const wk = this._calKey(this._calTabWeekStartDate(dt));
@@ -5791,19 +7376,24 @@
             monthEnd[mo] = w;
             const cls = ["north-caltab-habit-cell"];
             if (lvl) cls.push("tt-lv" + lvl);
-            const tip = raw
-              ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
-              : `${key} · 未记录`;
+            if (off) cls.push("is-off");
+            const tip = off
+              ? `${key} · ${off < 0 ? "未开始" : "已结束"}`
+              : raw
+                ? `${key} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}`
+                : `${key} · 未记录`;
             const tipTail =
-              cfg.period === "day"
-                ? this._habitPeriodAchieved(cfg, v)
-                  ? "达标"
-                  : "未达标"
-                : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
+              off
+                ? ""
+                : cfg.period === "day"
+                  ? this._habitPeriodAchieved(cfg, v)
+                    ? "达标"
+                    : "未达标"
+                  : `本期累计 ${fmtN(cum)}/${fmtN(cfg.goal)}`;
             col += `<i class="${cls.join(
               " "
             )}"${lv1Attr(lvl)} data-caltab-habitday="${key}" data-tip="${escapeHtml(
-              `${tip} · ${tipTail}`
+              off ? tip : `${tip} · ${tipTail}`
             )}"></i>`;
           }
           heatCols += `<div class="north-caltab-habit-heatcol">${col}</div>`;
@@ -5908,7 +7498,7 @@
                       label
                     )}<span class="north-caltab-habit-goal">${habitGoalText(
           cfg
-        )}</span>${p === "range" ? viewChip(type, vw) : ""}</span>
+        )}</span>${rangeBadge(cfg)}${p === "range" ? viewChip(type, vw) : ""}</span>
                     <span class="north-caltab-habit-stats">
                         <span>${sicon("iconPlugZap")}连续 <b>${streak.n}</b> ${streak.unit}</span>
                         <span>${sicon("iconStar")}最长 <b>${longest.n}</b> ${longest.unit}</span>
@@ -5988,7 +7578,8 @@
             dt,
             raw,
             ["north-caltab-habit-wdot"],
-            key
+            key,
+            cfg
           )}<span class="north-caltab-habit-wdow">周${WD[dt.getDay()]}</span></div>`;
         }
         if (achievedNow(type)) doneCount += 1;
@@ -6002,7 +7593,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${rangeBadge(cfg)}</div>
                 <div class="north-caltab-habit-weekrow">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -6045,7 +7636,7 @@
             hitDays += 1;
             if (this._habitPeriodAchieved(cfg, dayVal(dt))) okDays += 1;
           }
-          cells += dotCell(dt, raw, ["north-caltab-habit-msq"], key);
+          cells += dotCell(dt, raw, ["north-caltab-habit-msq"], key, cfg);
         }
         const trail = (7 - ((lead + dim) % 7)) % 7;
         for (let i = 0; i < trail; i++)
@@ -6061,7 +7652,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${rangeBadge(cfg)}</div>
                 <div class="north-caltab-habit-mcal">${cells}</div>
                 <div class="north-caltab-habit-mfoot"><span>${sicon(
                   "iconCheck"
@@ -6100,7 +7691,7 @@
           label
         )}</span><span class="north-caltab-habit-mcard-goal">${escapeHtml(
           habitGoalText(cfg)
-        )}</span></div>
+        )}</span>${rangeBadge(cfg)}</div>
                 <div class="north-caltab-habit-dmain"><b class="north-caltab-habit-dval">${valTxt}</b><span class="north-caltab-habit-dbadge ${
                   ok ? "ok" : "no"
                 }">${badge}</span></div>
@@ -6972,6 +8563,12 @@
       /* 习惯视图：挑中的类型一个一张卡 + 一整年的格子（数据用全量记录） */
       const isHabit = view === "habit";
       const isStats = view === "stats";
+      /* 指标视图：指标（从记录内容里抽出来的数值）一张卡一条线。
+         它另有一排「查看范围」段位（近 30/90 天…），但顶栏那组**不隐藏**：
+           翻页 / 今天 —— 平移指标窗口（锚点就是窗口右端，见 _metricWindow）；
+           类型筛选   —— 只统计选中类型的记录。
+         两者都在这一屏里真管用，藏起来反而像坏了。 */
+      const isMetric = view === "metric";
       /* 统计视图的周期状态：首次进入给默认值（按年，标题即「N 年」），
          与 Dock 统计互不干扰 */
       if (isStats) {
@@ -7047,6 +8644,15 @@
       let body = "";
       if (isStats) {
         body = this._buildCalendarStatsHtml();
+      } else if (isMetric) {
+        body = this._buildCalendarMetricHtml();
+        /* 标题与习惯视图同一个写法：先给这一段日期，再给「N 个指标」
+           （表格视图是「年月 · N 条记录」，同一套节奏）。 */
+        const win = this._metricWindow(this._metricRecords());
+        const n = this._metrics().length;
+        title = `${this._metricRangeLabel(win.from, win.to)} · ${
+          n ? `${n} 个指标` : "指标"
+        }`;
       } else if (isTable) {
         body = table.html;
       } else if (isHabit) {
@@ -7090,7 +8696,7 @@
           `<span class="north-caltab-typedot north-caltab-typedot-all"></span><span>全部类型</span></div>`,
       ]
         .concat(
-          this._calTabTypeOptions().map(
+          this._calTabTypeOptions(isMetric ? this._metricRecords() : null).map(
             (o) =>
               `<div class="north-caltab-typeopt${
                 this._calTabTypeFilter.has(o.name) ? " on" : ""
@@ -7187,6 +8793,7 @@
                     ${seg("table", "表格")}
                     ${seg("habit", "习惯")}
                     ${seg("stats", "统计")}
+                    ${seg("metric", "指标")}
                 </div>
                 <div class="north-caltab-types">
                     <button class="north-caltab-typebtn${
@@ -7245,6 +8852,9 @@
                 </div>
             </div>
         `;
+
+      /* 指标段位：整屏已经插好，按每张卡的真实宽度逐张成图（原因见 _fitMetricCharts） */
+      if (isMetric) this._fitMetricCharts(container);
 
       /* 时间轴视图：进来先滚到早上 7 点 —— 活动基本都在白天，从 00:00 起
          要往下滚很久才看得到东西。表头在滚动容器之外，不会跟着滚走。
@@ -7763,6 +9373,29 @@
           );
           return;
         }
+        /* 指标段位：卡片上的尺度段位（日 / 周 / 月）。同一份记录换个粒度看，
+           只重绘这一屏 —— 重绘后按 _calTabMetricScale 恢复高亮。 */
+        const metricScale =
+          e.target.closest && e.target.closest("[data-caltab-metric-scale]");
+        if (metricScale) {
+          const name = metricScale.dataset.caltabMetricName || "";
+          const v = metricScale.dataset.caltabMetricScale || "";
+          if (name && METRIC_SCALES.some((o) => o.value === v)) {
+            if (!this._calTabMetricScale) this._calTabMetricScale = {};
+            this._calTabMetricScale[name] = v;
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        /* 指标段位：查看范围（近 30 天 / 近 90 天 / 近一年 / 全部） */
+        const metricScope =
+          e.target.closest && e.target.closest("[data-caltab-metric-scope]");
+        if (metricScope) {
+          this._calTabMetricScope =
+            metricScope.dataset.caltabMetricScope || METRIC_SCOPE_DEFAULT;
+          this._paintCalendarTab(container);
+          return;
+        }
         /* 统计柱子：周 / 月跳到那天的日视图，年跳到那月的月视图 */
         const statBar = e.target.closest && e.target.closest("[data-caltab-statbar]");
         if (statBar) {
@@ -7919,6 +9552,12 @@
               this._paintCalendarTab(container);
               return;
             }
+            /* 指标视图的「今天」：窗口锚点清回今天（默认状态） */
+            if (this._calTabView === "metric") {
+              this._calTabMetricAnchor = null;
+              this._paintCalendarTab(container);
+              return;
+            }
             this._calTabAnchor = new Date();
             /* 月视图看的是 _calTabMonth，所以要一并清掉它 —— 一清就跟焦点日走，
                两种视图下「今天」都回到当月 / 当周 / 当日 */
@@ -7936,7 +9575,8 @@
           /* 设置：打开「设置」弹窗（左侧导航 + 右侧内容，与侧边栏那套设置同一份内容）。
              关窗时弹窗自己会重绘日历，类型 / 颜色的变动照常反映。 */
           if (act === "settings") {
-            this._openSettingsModal();
+            /* 按钮上写了 data-settings-group 的（如指标空态）直接落到那个分区 */
+            this._openSettingsModal(btn.dataset.settingsGroup || "");
             return;
           }
           /* 习惯视图按当前周期翻：日 ±1 天、周 ±7 天、月 ±1 月、年 ±1 年；
@@ -8030,6 +9670,23 @@
               base.getMonth() + (act === "next" ? 1 : -1),
               1
             );
+            this._paintCalendarTab(container);
+            return;
+          }
+          /* 指标视图：按当前「查看范围」的步长平移窗口（范围=全部时按 30 天挪）。
+             锚点不越过今天 —— 到了今天就到尽头，再往后按不动（空数据的方向没什么可看），
+             想回当下按「今天」。这样顶栏那组翻页在当前视图里是真管用的。 */
+          if (this._calTabView === "metric") {
+            const days = parseInt(this._calTabMetricScope, 10);
+            const step = Number.isFinite(days) && days > 0 ? days : 30;
+            const base = new Date(
+              this._calTabMetricAnchor instanceof Date ? this._calTabMetricAnchor : new Date()
+            );
+            base.setDate(base.getDate() + (act === "next" ? step : -step));
+            const limit = new Date();
+            limit.setHours(23, 59, 59, 999);
+            if (base.getTime() > limit.getTime()) base.setTime(limit.getTime());
+            this._calTabMetricAnchor = base;
             this._paintCalendarTab(container);
             return;
           }

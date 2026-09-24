@@ -524,6 +524,50 @@
   -webkit-appearance: none;
   margin: 0;
 }
+/* 时间范围行：开始 / 结束两枚日期输入，留空 = 那头不限。
+   窄面板下自动换行，日期输入给足最小宽度免得被挤没 */
+.tt-habitpick__daterow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--b3-border-color);
+}
+.tt-habitpick__dlabel,
+.tt-habitpick__dsep {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+/* 胶囊没设日期时的浅色态（胶囊本体复用习惯页 .north-caltab-habit-rfield） */
+.tt-habitpick__daterow .north-caltab-habit-rfield.is-empty {
+  color: var(--b3-theme-on-surface-light);
+}
+/* 「不限」：清掉范围的快捷出口，只在设过范围时出现 */
+.tt-habitpick__dclear {
+  padding: 2px 8px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.tt-habitpick__dclear:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+/* 没设范围时的提示：一句浅字，占位但不抢视线 */
+.tt-habitpick__dnote {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.8;
+  white-space: nowrap;
+}
 /* 门槛卡头部的分组小标：显示该习惯归属的分组，没分组不占位 */
 .tt-habitpick__gtag {
   padding: 1px 6px;
@@ -3821,6 +3865,16 @@
   line-height: 1.7;
   white-space: nowrap;
 }
+/* 时间范围状态徽标：未开始 / 已结束 —— 中性灰，别抢类型色的戏 */
+.north-caltab-habit-rbadge {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 10.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
 /* 习惯卡上的「查看窗口」胶囊：**只影响这一个习惯**，点开在卡片里就地展开设置条。
    没配过 = 「跟随顶部」，用中性灰底不抢眼；配过了用类型色淡底，
    一眼就能看出这个习惯看的是自己那一段。 */
@@ -3978,6 +4032,12 @@
 .north-caltab-habit-cell.is-blank {
   background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
   opacity: 0.5;
+}
+/* 年热力格：时间范围外的日子 —— 比未记录再淡一档，一眼分清
+   「那阵子还没开始 / 已经结束」和「那阵子在偷懒」 */
+.north-caltab-habit-cell.is-off {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 2%, transparent);
+  opacity: 0.45;
 }
 /* ============ 习惯视图 · 周期切换（日 / 周 / 月 / 年 / 范围） ============ */
 /* 注意：本段的格子基础底色必须写在 .tt-lv1~5 **之前** —— 等级色靠
@@ -4208,6 +4268,12 @@
 .north-caltab-habit-msq.is-future {
   background: color-mix(in srgb, var(--tt-c) 5%, transparent);
 }
+/* 时间范围外：同淡一档 —— off 的日子不可能有记录，压在实心规则后面只为稳赢 */
+.north-caltab-habit-wdot.is-off,
+.north-caltab-habit-msq.is-off {
+  background: color-mix(in srgb, var(--tt-c) 3%, transparent);
+  opacity: 0.55;
+}
 /* 月卡底部的统计行：打卡天数 / 达标天数 */
 .north-caltab-habit-mfoot {
   display: flex;
@@ -4345,6 +4411,10 @@
    一眼看出是「还没到」而不是「那天没记录」，同时整月的格子还是齐的。 */
 .north-caltab-habit-rcell.is-future {
   opacity: 0.5;
+}
+/* 时间范围外的范围格：压淡，日期字也跟着淡 */
+.north-caltab-habit-rcell.is-off {
+  opacity: 0.4;
 }
 .north-caltab-habit-rcell-date {
   font-size: 10px;
@@ -4706,6 +4776,59 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
+}
+/* 类型占比：环形图在左（中心放总数），芯片网格做图例在右；
+   窄容器自动换行，图例落到图下面 */
+.north-caltab-stats-typedist {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+/* 图例吃掉环形图右侧的剩余宽度（窄到放不下时整体换到图下面） */
+.north-caltab-stats-typedist .north-caltab-stats-chips {
+  flex: 1 1 240px;
+}
+.north-caltab-stats-donut {
+  position: relative;
+  flex: 0 0 auto;
+  width: 132px;
+  height: 132px;
+}
+.north-caltab-stats-donut svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* 悬停聚焦：其余扇区退淡，悬停那扇保持实色 —— 看占比时视线不迷路 */
+.north-caltab-stats-donut-seg {
+  cursor: default;
+  transition: opacity 0.15s ease;
+}
+.north-caltab-stats-donut:hover .north-caltab-stats-donut-seg {
+  opacity: 0.35;
+}
+.north-caltab-stats-donut:hover .north-caltab-stats-donut-seg:hover {
+  opacity: 1;
+}
+.north-caltab-stats-donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+}
+.north-caltab-stats-donut-center b {
+  font-size: 20px;
+  line-height: 1.2;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-stats-donut-center span {
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
 }
 .north-caltab-stats-chip {
   display: flex;
@@ -5234,4 +5357,554 @@ textarea.north-caltab-edit-input {
     var(--tt-c, #888888) 22%,
     transparent
   );
+}
+
+/* ===================== 指标：指标段位 + 指标管理 =====================
+   指标段位（日历标签页第八个段位）与它的管理弹窗。
+   两张卡都沿用同一套观感：大类盒浅底、指标卡白底淡边、折线几何与统计视图
+   那张每日走势完全一致（viewBox 1000×200），所以两张折线图放在一起不会打架。 */
+
+.north-caltab-metric {
+  /* 外层 .north-timetrail-caltab 自己就是滚动容器（overflow-y:auto），
+     这里不再套一层滚动 —— 跟统计视图一样只做纵向排布 */
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 2px 10px;
+}
+
+/* 范围段位 + 日期区间 + 管理入口。段位靠左（它管的是这一屏看多长），
+   区间文字吃掉中间，管理按钮靠右 —— 与顶栏那条 bar 的节奏一致 */
+.north-caltab-metric-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 吸顶：指标多了往下滚时，还能随时换「查看范围」或进管理窗口 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 0;
+  background: var(--b3-theme-background);
+}
+.north-caltab-metric-bar .north-caltab-segments {
+  margin-left: 0;
+}
+
+/* 一个大类 = 一个浅底盒子，与习惯页的分组节同款 */
+.north-caltab-metric-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-metric-grouphead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px;
+}
+.north-caltab-metric-groupname {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 竖色条：与大类的名字一起看，扫一眼先看见条、再读到组名 */
+.north-caltab-metric-groupname::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--b3-theme-primary);
+}
+.north-caltab-metric-groupcount {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+
+/* 卡片网格：一屏两列（480px 起）。折线现在是按每张卡的真实宽度成图的
+   （见 _fitMetricCharts），所以这个宽度只为"一屏看几个指标"服务，不再影响字号。
+   min() 是防窄容器溢出：容器比 480 还窄时轨道跟着容器走，不会撑破。 */
+.north-caltab-metric-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
+  gap: 14px;
+}
+
+.north-caltab-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 10px;
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.north-caltab-metric-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.north-caltab-metric-chipdot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.north-caltab-metric-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 绑了类型的指标：名字后面挂一枚小标，一眼看出这张图只统计某个类型的记录 */
+.north-caltab-metric-type {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  line-height: 17px;
+}
+.north-caltab-metric-last {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-metric-last b {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--b3-theme-on-background);
+}
+/* 与上一次的变化量：刻意不着红绿 —— 体重涨了不是"好消息"也不是"坏消息"，
+   跟着股票那套配色会误导人 */
+.north-caltab-metric-delta {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-metric-scales {
+  margin-left: auto;
+}
+.north-caltab-metric-scales button {
+  height: 24px;
+  min-width: 34px;
+  padding: 0 9px;
+  font-size: 13px;
+}
+
+/* 空盒子：折线由 _fitMetricCharts 按真实宽度画进来。
+   先给一个最小高度，避免"先塌一下再撑开"的跳动 */
+.north-caltab-metric-chartbox {
+  min-height: 190px;
+}
+.north-caltab-metric-chartbox > .north-caltab-metric-chart {
+  min-height: 0;
+}
+
+/* 折线：几何由 JS 按卡片真实宽度算，这里只给笔画与填充 */
+.north-caltab-metric-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 2px 0 0;
+  overflow: visible;
+}
+.north-caltab-metric-line {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.north-caltab-metric-area {
+  stroke: none;
+  opacity: 0.08;
+}
+.north-caltab-metric-dot {
+  fill: var(--b3-theme-background);
+  stroke-width: 2;
+}
+
+/* 分线（空腹 / 餐后）的图例：小圆点 + 名字，与折线同色 */
+.north-caltab-metric-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 0;
+}
+.north-caltab-metric-legenditem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-metric-legenditem i {
+  display: inline-block;
+  width: 8px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.north-caltab-metric-foot {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 60%, transparent);
+}
+.north-caltab-metric-none {
+  padding: 22px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 空态：与习惯视图的空态同一套写法 —— 标题 / 说明 / 一枚主色「去设置」。
+   这里不摆操作项：怎么建、怎么改都在指标管理弹窗里 */
+.north-caltab-metric-empty {
+  margin: auto;
+  padding: 40px 0;
+  text-align: center;
+}
+.north-caltab-metric-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  margin-bottom: 6px;
+}
+.north-caltab-metric-empty-desc {
+  max-width: 380px;
+  margin: 0 auto 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-metric-empty-btn {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--b3-theme-primary);
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ---------- 指标管理弹窗 ---------- */
+.tt-metrics {
+  display: flex;
+  flex-direction: column;
+}
+.tt-metrics__intro {
+  margin-bottom: 14px;
+  font-size: var(--b3-font-size);
+  line-height: 1.6;
+  color: var(--b3-theme-on-surface);
+}
+.tt-metrics__group {
+  padding: 16px 0 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 25%, transparent);
+}
+.tt-metrics__group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.tt-metrics__group-name {
+  flex: 0 0 auto;
+  width: 190px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 7px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-background);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  outline: none;
+}
+.tt-metrics__group-remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--b3-theme-error, #d23f31);
+  cursor: pointer;
+}
+.tt-metrics__group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tt-metrics__item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 16px;
+  border-radius: 10px;
+  background: var(--b3-theme-surface);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 40%, transparent);
+}
+.tt-metrics__item-head,
+.tt-metrics__item-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* 展开区那一行有四个控件（名称 / 单位 / 目标值 / 小数位），窄了要能自动换行，
+   否则最右边的「小数位」会被挤出卡片外（踩过） */
+.tt-metrics__item-row {
+  flex-wrap: wrap;
+}
+/* 与类型色块同理：形状钉住，不随主题变圆（原因见 .tt-types__item-color 的说明）。
+   前缀 .tt-metrics 提特异性，形状相关属性一律 !important。 */
+.tt-metrics .tt-metrics__item-color {
+  flex-shrink: 0;
+  display: block;
+  width: 20px;
+  height: 20px;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 3px !important;
+  background: transparent !important;
+  overflow: hidden;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.tt-metrics .tt-metrics__item-color:hover {
+  transform: scale(1.1);
+}
+/* 绑了类型时这个色块跟类型色走、点了也不能改（颜色归「设置 · 类型管理」管）——
+   去掉悬停的放大反馈，光标也给默认箭头，别让人以为能点 */
+.tt-metrics .tt-metrics__item-color.is-follow {
+  cursor: default;
+}
+.tt-metrics .tt-metrics__item-color.is-follow:hover {
+  transform: none;
+}
+.tt-metrics__item-name,
+.tt-metrics__item-unit,
+.tt-metrics__item-kw,
+.tt-metrics__item-target,
+.tt-metrics__item-split,
+.tt-metrics__item-exclude {
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 50%, transparent);
+  border-radius: 7px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tt-metrics__item-name {
+  /* 基准宽比同排的「单位 / 目标值」大一点：它的 placeholder「名称（留空跟随匹配词）」
+     是最长的一条，字号提上来之后 120px 会把它裁掉 */
+  flex: 1 1 140px;
+  font-weight: 600;
+}
+.tt-metrics__item-unit {
+  flex: 1 1 88px;
+}
+/* 匹配词吃掉整行剩下的宽度（它是唯一必填项，视觉上该最显眼） */
+.tt-metrics__item-kw {
+  flex: 1 1 0;
+}
+.tt-metrics__item-target,
+.tt-metrics__item-split,
+.tt-metrics__item-exclude {
+  flex: 1 1 120px;
+}
+/* 卡片里那个「类型」下拉：卡片头是横排的，给它一个上限宽度；
+   菜单可以比触发器宽一点，长类型名不至于被截 */
+.tt-metrics__item-type {
+  flex: 0 0 auto;
+  max-width: 146px;
+}
+.tt-metrics__item-type .tt-cddl__trigger {
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  font-size: 13px;
+}
+.tt-metrics__item-type .tt-cddl__popup {
+  right: auto;
+  min-width: 170px;
+}
+
+/* 「更多」开关：默认态低调，展开后点亮 —— 让人一眼看出这张卡还有没有隐藏设置 */
+.tt-metrics__item-more {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 55%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tt-metrics__item-more:hover {
+  color: var(--b3-theme-on-background);
+}
+.tt-metrics__item-more.on {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
+  color: var(--b3-theme-primary);
+}
+/* 折叠区：默认整块收起来（hidden），点「更多」才展开 */
+.tt-metrics__item-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tt-metrics__item-extra[hidden] {
+  display: none;
+}
+.tt-metrics__item-name:focus,
+.tt-metrics__item-unit:focus,
+.tt-metrics__item-kw:focus,
+.tt-metrics__item-target:focus,
+.tt-metrics__item-split:focus,
+.tt-metrics__item-exclude:focus,
+.tt-metrics__item-dec:focus {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+}
+.tt-metrics__item-remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--b3-theme-error, #d23f31);
+  cursor: pointer;
+}
+.tt-metrics__decimals {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+.tt-metrics__item-dec {
+  width: 54px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 50%, transparent);
+  border-radius: 7px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+.tt-metrics__item-segs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+}
+.tt-metrics__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tt-metrics__label {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+.tt-metrics__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--b3-theme-background);
+}
+.tt-metrics__segbtn {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tt-metrics__segbtn:hover {
+  color: var(--b3-theme-on-background);
+}
+.tt-metrics__segbtn.on {
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-background);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.tt-metrics__item-add,
+.tt-metrics__group-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 7px 14px;
+  border: 1px dashed color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  border-radius: 7px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.tt-metrics__item-add:hover,
+.tt-metrics__group-add:hover {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 50%, transparent);
+  color: var(--b3-theme-on-background);
+}
+.tt-metrics__group-add {
+  margin-top: 18px;
+}
+.tt-metrics__hint {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
+}
+
+/* 窄屏（移动端 / 侧栏里的日历页）：卡片一列到底，别挤成两条看不清的折线 */
+@media (max-width: 720px) {
+  .north-caltab-metric-cards {
+    grid-template-columns: 1fr;
+  }
+  .north-caltab-metric-bar {
+    flex-wrap: wrap;
+  }
+  .tt-metrics__item-row {
+    flex-wrap: wrap;
+  }
 }
