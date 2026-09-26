@@ -32,6 +32,33 @@
      以后再加段位，不在这里的点了只切高亮、不换内容。 */
   const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "stats", "metric"];
 
+  /* 段位中文标签：顶栏 seg() 与设置里「视图显示」的芯片共用一份，改一处两边都跟着变 */
+  const CAL_TAB_VIEW_LABELS = {
+    month: "月",
+    week: "周",
+    three: "三",
+    day: "日",
+    table: "表格",
+    habit: "习惯",
+    stats: "统计",
+    metric: "指标",
+  };
+
+  /* —— 番茄速记对接 ——
+     开关打开后每条记录额外写这两个**固定名字**的属性，供番茄速记等插件读取。
+     刻意不跟随「属性名前缀」设置：对方插件按这两个名字原样来读，一字不能差。
+       time     = 记录的「当下时间」，与 custom-<前缀>-time 同值（15:42）；
+       interval = 与相邻记录的间隔分钟数（7m、90m），算法跟随「时间计算模式」：
+                  结束模式（默认）= 当前 − 上一条；开始模式 = 下一条 − 当前。
+                  没有相邻记录（文档里第一条 / 最后一条）或间隔非正的不写，
+                  与时间轴「持续」的口径一致。 */
+  const TOMATO_IDEA_TIME_ATTR = "custom-tomato-idea-time";
+  const TOMATO_IDEA_INTERVAL_ATTR = "custom-tomato-idea-interval";
+  /* 记录改动后延迟多久做一次番茄属性同步：太紧跟在删除后面查库，
+     内核可能还没把块删掉，算出来的邻居就是错的；顺带把连续打字 /
+     批量扫描攒成一次。 */
+  const TOMATO_SYNC_DELAY = 800;
+
   /* ---- 指标（从记录内容里抽数值画折线） ----
      指标 = 一条「从记录内容里抽出来的数值序列」：内容里写「体重 65.5」，就有对应的体重走势。
      定义只存在插件设置里（data.metricGroups），解析**只读不写** ——
@@ -772,6 +799,9 @@
       super(options);
       /* 每个文档一个串行队列，避免属性读写相互穿插 */
       this._serialQueues = new Map();
+      /* 番茄速记属性的同步防抖定时器（key = 文档 ID）与补写进行中的标记 */
+      this._tomatoSyncTimers = new Map();
+      this._tomatoBackfilling = false;
       /* 文档元信息缓存：id → { date, daily } */
       this._docMeta = new Map();
       this._observers = [];
@@ -1057,6 +1087,13 @@
         clearTimeout(this._recordsRefreshTimer);
         this._recordsRefreshTimer = null;
       }
+      /* 番茄速记属性同步的防抖定时器一并清掉 */
+      this._tomatoSyncTimers.forEach((t) => {
+        try {
+          clearTimeout(t);
+        } catch (e) {}
+      });
+      this._tomatoSyncTimers.clear();
       /* 摘掉光标监听 */
       if (this._onSelectionChange) {
         document.removeEventListener("selectionchange", this._onSelectionChange);
@@ -1213,6 +1250,20 @@
         })
       );
 
+      /* —— 视图外观：视图显示 ——
+         日历顶栏那排段位（月 / 周 / 三 / 日 / 表格 / 习惯 / 统计 / 指标）想藏哪个点一下。
+         data 里没记过的视图按显示算，所以默认就是全部显示，老用户升级零改动。 */
+      appearanceCard.appendChild(
+        this._buildRow({
+          title: "视图显示",
+          desc: "点一下隐藏 / 显示日历顶栏对应的段位，改动立刻生效；至少保留一个。默认全部显示。",
+        })
+      );
+      const viewPick = document.createElement("div");
+      viewPick.className = "tt-habitpick";
+      appearanceCard.appendChild(viewPick);
+      this._mountViewPicker(viewPick);
+
       /* —— 日历设置：数据源 —— */
       calendarCard.appendChild(
         this._buildRow({
@@ -1306,6 +1357,28 @@
             const label =
               (TIME_MODE_OPTIONS.find((o) => o.value === mode) || {}).label || mode;
             showMessage(`${NAME}：时间计算模式已改为「${label}」`);
+            /* 番茄速记的间隔跟的就是这套口径：开着的话全部重算一遍 */
+            if (this._tomatoIdeaOn()) this._backfillTomatoAttrs();
+          },
+        })
+      );
+
+      /* —— 控制设置：番茄速记属性 ——
+         不是每个用户都需要，默认关。开启后新增 / 修改的记录都会带上
+         custom-tomato-idea-time 与 custom-tomato-idea-interval 两个属性
+         （名字固定，不跟随属性名前缀 —— 对方插件按原名读），
+         并把历史记录补写一遍；关掉只停新写，已写入的属性保留（数据不丢）。 */
+      controlCard.appendChild(
+        this._buildRow({
+          title: "番茄速记属性",
+          desc:
+            "开启后每条记录额外写 tomato-idea-time（当下时间）与 tomato-idea-interval（相邻间隔，如 7m）两个属性，默认关闭。",
+          controlType: "toggle",
+          value: !!this.data.tomatoIdeaAttrs,
+          onChange: (v) => {
+            this.data.tomatoIdeaAttrs = v;
+            this._persist("保存番茄速记属性开关");
+            if (v) this._backfillTomatoAttrs();
           },
         })
       );
@@ -1806,6 +1879,48 @@
         cfg.goal = v;
         this._habitSetConfig(type, cfg);
         input.value = v;
+        this._refreshCalendarTabs();
+      };
+    }
+
+    /* 视图显示的芯片区：顶栏八个段位铺成一行小芯片，亮着 = 显示。
+       点一下切换显隐，改完立刻落盘 + 重绘已打开的日历标签页。
+       复用习惯选择器那套 .tt-habitpick 芯片样式，视觉与设置面板其它区块一致。 */
+    _mountViewPicker(host) {
+      if (!host) return;
+      const on = (k) => this._calViewOn(k);
+      host.innerHTML = `<div class="tt-habitpick__chips">${CAL_TAB_VIEWS.map(
+        (k) =>
+          `<button class="tt-habitpick__chip${
+            on(k) ? " on" : ""
+          }" type="button" data-caltab-viewtoggle="${k}">${escapeHtml(
+            CAL_TAB_VIEW_LABELS[k] || k
+          )}</button>`
+      ).join("")}</div>`;
+      host.onclick = (e) => {
+        const chip = e.target.closest && e.target.closest("[data-caltab-viewtoggle]");
+        if (!chip) return;
+        const key = chip.dataset.caltabViewtoggle || "";
+        if (CAL_TAB_VIEWS.indexOf(key) < 0) return;
+        if (on(key)) {
+          /* 最后一枚不能关：顶栏一个段位都不剩就没人能切回去了 */
+          if (CAL_TAB_VIEWS.filter(on).length <= 1) {
+            showMessage(`${NAME}：至少保留一个视图`);
+            return;
+          }
+          if (!this.data.calTabViews || typeof this.data.calTabViews !== "object") {
+            this.data.calTabViews = {};
+          }
+          this.data.calTabViews[key] = false;
+        } else {
+          if (!this.data.calTabViews || typeof this.data.calTabViews !== "object") {
+            this.data.calTabViews = {};
+          }
+          this.data.calTabViews[key] = true;
+        }
+        this._persist("保存视图显示");
+        chip.classList.toggle("on", on(key));
+        /* 正看着的视图被藏掉时，重绘会把画面退回第一个开着的段位 */
         this._refreshCalendarTabs();
       };
     }
@@ -5815,8 +5930,10 @@
           密集时段几分钟一条，块又保底 22px 高，固定 40px/小时必然叠字。
           哪个小时装不下就把那个小时撑高（全部列共享一套小时高，刻度列的
           标签才始终对得上线）；空旷时段维持 40px，看起来与普通日历无异。
-       ③ _buildCalendarTimelineEvents —— 块按时间比例定位，但与上一块
-          贴上时只后退到刚好不叠的位置：拥挤的记录上下排开，永不互相压字。 */
+          估高按真实几何迭代收敛，保证与 ③ 用同一份几何（细节见函数注释）。
+       ③ _buildCalendarTimelineEvents —— 块按时间比例定位、按均匀尺度取高，
+          与上一块贴上时只后退到刚好不叠的位置：拥挤的记录上下排开，
+          永不互相压字，也不会因为小时被撑高而整体往下漂。 */
 
     /* 给「同一天」的记录按当前时间计算模式算出真实起止（分钟）。
        入参 sorted 必须是已按时间升序的 [{ rec, range }]，range 来自 _parseTimeRange。
@@ -5870,51 +5987,73 @@
       return list.map((x, i) => Object.assign({}, x, ranges[i]));
     }
 
-    /* 估各小时需要多高，两路一起算，取大者：
-       ① 按均匀 40px/小时把每天预演摆一遍（保底块高 + 间距会把密集记录往后顶），
-          块底落到哪个小时，就把那个小时撑到装得下 —— 跨时块不重复计入沿途小时；
-       ② 同一小时里起始的记录堆：按「最小块高 + 间距」从整点附近往下摞也要装得下，
-          否则整堆会顺流冲进后面几小时，离自己的时间越来越远。 */
+    /* 估各小时需要多高。摆块（_buildCalendarTimelineEvents）发生在「弹性小时」
+       的几何里：top 用的 yOf 会随小时高变大，所以估高不能按 40px 均匀几何
+       一遍定死 —— 那样估出来的需求偏小，摆出来的块越排越往下漂，漂出去的
+       部分落在没撑过的小时里，块与刻度线就对不上好几个钟头。
+       这里改成迭代收敛：按当前小时高真实摆一遍（与摆块同一套链式逻辑、
+       同一份 yOf）→ 量出每块的块底落在哪个小时、超出多少 → 重算小时高 →
+       再摆，循环到小时高不再变化（块高按均匀尺度取，链式漂移有界，最多几
+       轮就稳住；封顶 8 轮兜底）。
+       每轮两路一起算，取大者：
+       ① 真实摆块：块底落到哪个小时，就把那个小时撑到装得下；
+       ② 同一小时里起始 ≥ 2 条的堆：按「最小块高 + 间距」从整点附近往下摞
+          也要装得下，否则整堆会顺流冲进后面几小时，离自己的时间越来越远。
+          （块高与起点都不随小时高变，这一路一轮算好即可。） */
     _calTimelineLayout(parsedByDate, days) {
-      const need = new Array(24).fill(0);
-      days.forEach((d) => {
-        const parsed = parsedByDate[this._calKey(d)] || [];
-        if (!parsed.length) return;
+      const dayLists = days
+        .map((d) => parsedByDate[this._calKey(d)] || [])
+        .filter((parsed) => parsed.length);
+
+      const stackNeed = new Array(24).fill(0);
+      dayLists.forEach((parsed) => {
         const byHour = new Map();
-        let prevBottom = -WEEK_EVENT_GAP;
         parsed.forEach((x) => {
-          const top = Math.max(
-            (x.start / 60) * WEEK_HOUR_H,
-            prevBottom + WEEK_EVENT_GAP
-          );
-          const bottom =
-            top +
-            Math.max(
-              WEEK_MIN_BLOCK_H,
-              ((x.end - x.start) / 60) * WEEK_HOUR_H
-            );
-          prevBottom = bottom;
-          const hb = Math.max(
-            0,
-            Math.min(23, Math.floor((bottom - 0.01) / WEEK_HOUR_H))
-          );
-          need[hb] = Math.max(need[hb], bottom - hb * WEEK_HOUR_H);
           const h = Math.max(0, Math.min(23, Math.floor(x.start / 60)));
           if (!byHour.has(h)) byHour.set(h, []);
           byHour.get(h).push(x.start);
         });
-        /* 只有同一小时里起始 ≥ 2 条才可能互相挤：单条记录的溢出交给 ① 兜，
-           不然随手记的半点记录也会把所在小时撑高，稀疏日就跟旧版长得不一样了 */
         byHour.forEach((starts, h) => {
           if (starts.length < 2) return;
           const stackH =
             starts.length * WEEK_MIN_BLOCK_H +
             (starts.length - 1) * WEEK_EVENT_GAP;
           const frac = (starts[0] - h * 60) / 60;
-          need[h] = Math.max(need[h], stackH + frac * WEEK_HOUR_H);
+          stackNeed[h] = Math.max(stackNeed[h], stackH + frac * WEEK_HOUR_H);
         });
       });
-      const hourH = need.map((n) => Math.max(WEEK_HOUR_H, Math.ceil(n)));
+
+      /* 块的展示高度：均匀尺度（时长 × 基准 40px/小时），与摆块处保持同一
+         口径 —— 撑高只负责腾出行距，不改变块自己的高矮（见摆块处的说明） */
+      const blockH = (x) =>
+        Math.max(WEEK_MIN_BLOCK_H, ((x.end - x.start) / 60) * WEEK_HOUR_H);
+
+      let hourH = new Array(24).fill(WEEK_HOUR_H);
+      for (let iter = 0; iter < 8; iter++) {
+        const cum = [0];
+        for (let h = 0; h < 24; h++) cum.push(cum[h] + hourH[h]);
+        const yOf = (min) => {
+          const h = Math.max(0, Math.min(23, Math.floor(min / 60)));
+          return cum[h] + ((min - h * 60) / 60) * hourH[h];
+        };
+        const need = stackNeed.slice();
+        dayLists.forEach((parsed) => {
+          let prevBottom = -WEEK_EVENT_GAP;
+          parsed.forEach((x) => {
+            const top = Math.max(yOf(x.start), prevBottom + WEEK_EVENT_GAP);
+            const bottom = top + blockH(x);
+            prevBottom = bottom;
+            /* 块底落在哪个小时（按当前几何的 cum 找），就把那个小时撑到装得下 */
+            let hb = 0;
+            while (hb < 23 && cum[hb + 1] <= bottom) hb++;
+            need[hb] = Math.max(need[hb], bottom - cum[hb]);
+          });
+        });
+        const next = need.map((n) => Math.max(WEEK_HOUR_H, Math.ceil(n)));
+        if (next.every((v, h) => v === hourH[h])) break;
+        hourH = next;
+      }
+
       const cum = [0];
       for (let h = 0; h < 24; h++) cum.push(cum[h] + hourH[h]);
       /* 分钟 → 该视图里的纵向像素。各列与刻度都用它，整体只有这一份几何 */
@@ -5940,7 +6079,15 @@
       let prevBottom = -WEEK_EVENT_GAP;
       return parsed.map((x) => {
         const top = Math.max(yOf(x.start), prevBottom + WEEK_EVENT_GAP);
-        const height = Math.max(WEEK_MIN_BLOCK_H, yOf(x.end) - yOf(x.start));
+        /* 块高按**均匀尺度**取（时长 × 基准 40px/小时），不用 yOf 差值 ——
+           yOf 在弹性小时里被撑大，拿它算高度会让落在撑高小时里的块跟着
+           膨胀，膨胀又把后面的块顶得更低、顶进没撑过的小时，越摆越漂
+           （用户反馈的「时间段位置对不上」就是这条正反馈）。
+           撑高只负责把密集时段的行距腾出来，块本身多高只看时长。 */
+        const height = Math.max(
+          WEEK_MIN_BLOCK_H,
+          ((x.end - x.start) / 60) * WEEK_HOUR_H
+        );
         prevBottom = top + height;
 
         /* 块够高就上下两行：标题一行、完整区间一行。
@@ -8589,6 +8736,29 @@
       });
     }
 
+    /* —— 视图显示开关（设置里「视图显示」那排芯片）——
+       data.calTabViews 只记「显式关掉」的视图；没记过的一律按显示算 ——
+       新段位、老用户、写坏的数据都自然落到「显示」这个默认上。 */
+    _calViewOn(key) {
+      const m = this.data && this.data.calTabViews;
+      return !(m && typeof m === "object" && m[key] === false);
+    }
+
+    /* 顶栏实际要渲染的段位清单（按 CAL_TAB_VIEWS 的顺序）。
+       一个不剩时兜底回月历：顶栏至少留一个能点的段位。 */
+    _calVisibleViews() {
+      const on = CAL_TAB_VIEWS.filter((k) => this._calViewOn(k));
+      return on.length ? on : ["month"];
+    }
+
+    /* 想去 key 视图但它被藏起来了：退到第一个开着的视图。
+       统计柱子 / 习惯格子点了要跳日视图 —— 日视图藏起来时落到月历，
+       而不是把用户明确不要看的视图硬塞回去。 */
+    _calPickView(key) {
+      if (this._calViewOn(key)) return key;
+      return this._calVisibleViews()[0] || "month";
+    }
+
     /* 重绘日历标签页（初次进入 / 切视图 / 回到今天 / 翻页后调用，不重新拉数据）。
        月视图用连续滚动：一次渲染「上月 / 本月 / 下月」三块，垂直堆叠进一个
        **原生滚动容器** —— 滚轮只是滚容器，内容真正跟手，能停在半个月的位置。
@@ -8598,6 +8768,13 @@
     _paintCalendarTab(container) {
       if (!container) return;
       this._bindCalendarTab(container);
+
+      /* 当前视图被「视图显示」设置藏起来了：退回第一个还开着的段位。
+         设置里关掉正看着的视图、程序化跳转目标视图被藏，都靠这一处兜底，
+         后面 seg 渲染与高亮就不用各自操心了。 */
+      if (!this._calViewOn(this._calTabView)) {
+        this._calTabView = this._calPickView(this._calTabView);
+      }
 
       const anchor =
         this._calTabAnchor instanceof Date ? this._calTabAnchor : new Date();
@@ -8836,14 +9013,9 @@
             <div class="north-caltab-bar">
                 <span class="north-caltab-title">${title}</span>
                 <div class="north-caltab-segments">
-                    ${seg("month", "月")}
-                    ${seg("week", "周")}
-                    ${seg("three", "三")}
-                    ${seg("day", "日")}
-                    ${seg("table", "表格")}
-                    ${seg("habit", "习惯")}
-                    ${seg("stats", "统计")}
-                    ${seg("metric", "指标")}
+                    ${this._calVisibleViews()
+                      .map((k) => seg(k, CAL_TAB_VIEW_LABELS[k] || k))
+                      .join("")}
                 </div>
                 <div class="north-caltab-types">
                     <button class="north-caltab-typebtn${
@@ -9410,7 +9582,11 @@
         const seg = e.target.closest && e.target.closest("[data-caltab-view]");
         if (seg) {
           const want = seg.dataset.caltabView;
-          if (CAL_TAB_VIEWS.indexOf(want) >= 0 && this._calTabView !== want) {
+          if (
+            CAL_TAB_VIEWS.indexOf(want) >= 0 &&
+            this._calViewOn(want) &&
+            this._calTabView !== want
+          ) {
             this._calTabView = want;
             /* 切回月视图时丢掉它自己的翻看位置，让它回到焦点日所在的那一个月 ——
                否则会出现「日视图停在 8 月 5 日，切到月视图却停在 11 月」这种对不上的状态 */
@@ -9453,7 +9629,7 @@
           let m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
           if (m) {
             this._calTabAnchor = new Date(+m[1], +m[2] - 1, +m[3]);
-            this._calTabView = "day";
+            this._calTabView = this._calPickView("day");
             this._paintCalendarTab(container);
             return;
           }
@@ -9461,7 +9637,7 @@
           if (m) {
             this._calTabAnchor = new Date(+m[1], +m[2] - 1, 1);
             this._calTabMonth = null;
-            this._calTabView = "month";
+            this._calTabView = this._calPickView("month");
             this._paintCalendarTab(container);
           }
           return;
@@ -9544,7 +9720,7 @@
           );
           if (hm) {
             this._calTabAnchor = new Date(+hm[1], +hm[2] - 1, +hm[3]);
-            this._calTabView = "day";
+            this._calTabView = this._calPickView("day");
             this._paintCalendarTab(container);
           }
           return;
@@ -9940,6 +10116,8 @@
             [this._attr("updated")]: now,
           },
         });
+        /* 修改弹窗只改了这一条，但它前后邻居的番茄间隔都可能跟着变 */
+        this._scheduleTomatoSync(raw);
         this._closeCalEdit(container);
         showMessage(`${NAME}：已修改`);
         /* 文本和属性都变了：缓存作废，再重绘日历与 Dock */
@@ -10456,6 +10634,8 @@
             await this._serial(target.docId, () =>
               this._tagBlock(blockId, info, target.date)
             );
+            /* 新记录落库后同步番茄速记属性（自己 + 邻居的间隔都可能变） */
+            this._scheduleTomatoSync(target.docId);
           }
           closeAll();
           showMessage(`${NAME}：已记录`);
@@ -11051,6 +11231,176 @@
       return next;
     }
 
+    /* ===================== 番茄速记属性同步 ===================== */
+
+    /* 「番茄速记属性」开关是否打开（默认关） */
+    _tomatoIdeaOn() {
+      return !!(this.data && this.data.tomatoIdeaAttrs);
+    }
+
+    /* 块 ID / 文档 ID → 所在文档（根块）ID。文档 ID 查自己，两种都兜住。 */
+    async _tomatoRootIdOf(id) {
+      try {
+        const resp = await this._request("/api/query/sql", {
+          stmt: `SELECT root_id FROM blocks WHERE id = '${id}'`,
+        });
+        const rid =
+          resp && resp.code === 0 && resp.data && resp.data[0]
+            ? resp.data[0].root_id
+            : "";
+        return this._validId(rid) ? rid : "";
+      } catch (e) {
+        return "";
+      }
+    }
+
+    /* 同步一个文档里全部记录的番茄速记属性。传文档 ID。
+       记录按**内容**解析（与打标同一套 parseLine，不依赖属性索引 ——
+       刚打完标的新块属性可能还没建好索引，内容是立即可查的）。
+       算出每条的期望值后与现有属性比对，只写有变化的那几条 ——
+       稳定状态下同步是零写入，防抖反复触发也不产生写放大。 */
+    async _syncTomatoAttrs(rootId) {
+      if (!this._tomatoIdeaOn() || !this._validId(rootId)) return;
+      let rows = [];
+      try {
+        const resp = await this._request("/api/query/sql", {
+          stmt: `SELECT id, content FROM blocks WHERE root_id = '${rootId}' AND type = 'p'`,
+        });
+        if (resp && resp.code === 0 && Array.isArray(resp.data)) rows = resp.data;
+      } catch (e) {
+        return;
+      }
+      const toMin = (t) => {
+        const m = String(t || "").match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return null;
+        const h = Number(m[1]);
+        const mi = Number(m[2]);
+        if (!(h >= 0 && h <= 23) || !(mi >= 0 && mi <= 59)) return null;
+        return h * 60 + mi;
+      };
+      const recs = rows
+        .map((r) => {
+          const info = parseLine(r.content || "");
+          return info ? { id: r.id, min: toMin(info.time), time: info.time } : null;
+        })
+        .filter((x) => x && x.min !== null)
+        /* 同分钟的先后无所谓，但要有个确定的次序 —— 以块 ID 决胜负 */
+        .sort((a, b) => a.min - b.min || (a.id < b.id ? -1 : 1));
+      if (!recs.length) return;
+      /* 间隔口径 = 时间计算模式：end（默认）当前 − 上一条；start 下一条 − 当前。
+         没有邻居（第一条 / 最后一条）或间隔非正 → 空串 = 不该有这个属性 */
+      const mode = this._timeCalcMode();
+      const want = new Map();
+      for (let i = 0; i < recs.length; i++) {
+        let dur = null;
+        if (mode === "start") {
+          if (i + 1 < recs.length) dur = recs[i + 1].min - recs[i].min;
+        } else {
+          if (i > 0) dur = recs[i].min - recs[i - 1].min;
+        }
+        want.set(recs[i].id, {
+          time: recs[i].time,
+          interval: dur !== null && dur > 0 ? `${dur}m` : "",
+        });
+      }
+      /* 现有的两个属性一次查齐（join blocks 用 root_id 圈定本文档） */
+      const have = new Map();
+      try {
+        const resp = await this._request("/api/query/sql", {
+          stmt:
+            `SELECT a.block_id AS bid, a.name AS name, a.value AS value ` +
+            `FROM attributes a INNER JOIN blocks b ON b.id = a.block_id ` +
+            `WHERE b.root_id = '${rootId}' AND a.name IN ('${TOMATO_IDEA_TIME_ATTR}', '${TOMATO_IDEA_INTERVAL_ATTR}')`,
+        });
+        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
+          for (const row of resp.data) {
+            if (!have.has(row.bid)) have.set(row.bid, {});
+            have.get(row.bid)[row.name] = String(row.value == null ? "" : row.value);
+          }
+        }
+      } catch (e) {
+        /* 查不到就当全空，走全量写 */
+      }
+      for (const [blockId, w] of want) {
+        const cur = have.get(blockId) || {};
+        const patch = {};
+        if (cur[TOMATO_IDEA_TIME_ATTR] !== w.time) {
+          patch[TOMATO_IDEA_TIME_ATTR] = w.time;
+        }
+        if (w.interval === "") {
+          /* 间隔消失了（改成第一天条 / 时间被改没）：把旧值清掉 */
+          if (cur[TOMATO_IDEA_INTERVAL_ATTR]) {
+            patch[TOMATO_IDEA_INTERVAL_ATTR] = "";
+          }
+        } else if (cur[TOMATO_IDEA_INTERVAL_ATTR] !== w.interval) {
+          patch[TOMATO_IDEA_INTERVAL_ATTR] = w.interval;
+        }
+        if (!Object.keys(patch).length) continue;
+        try {
+          await this._request("/api/attr/setBlockAttrs", {
+            id: blockId,
+            attrs: patch,
+          });
+        } catch (e) {
+          console.warn(`${NAME}：写番茄速记属性失败`, e);
+        }
+      }
+    }
+
+    /* 记录有变动后调这个：800ms 防抖后走该文档的串行队列做一次同步。
+       传块 ID 或文档 ID 都行（统一归到根再排队，保证与打标同一把锁）。
+       开关没开就直接返回 —— 所有记录路径都可以无脑调，不增加判断成本。 */
+    _scheduleTomatoSync(id) {
+      if (!this._tomatoIdeaOn() || !this._validId(id)) return;
+      const prev = this._tomatoSyncTimers.get(id);
+      if (prev) clearTimeout(prev);
+      const timer = setTimeout(() => {
+        this._tomatoSyncTimers.delete(id);
+        (async () => {
+          const root = await this._tomatoRootIdOf(id);
+          if (!root) return;
+          await this._serial(root, () => this._syncTomatoAttrs(root));
+        })().catch((e) => console.warn(`${NAME}：同步番茄速记属性失败`, e));
+      }, TOMATO_SYNC_DELAY);
+      this._tomatoSyncTimers.set(id, timer);
+    }
+
+    /* 开启开关 / 切换时间计算模式后，把打过标的历史记录全部补一遍。
+       顺序跑（一篇同步完再下一篇），几百篇也只是几百个小查询，不压垮内核；
+       中途把开关关掉就立刻收手。 */
+    async _backfillTomatoAttrs() {
+      if (this._tomatoBackfilling) return;
+      this._tomatoBackfilling = true;
+      try {
+        const aDate = this._attr("date");
+        let rows = [];
+        try {
+          const resp = await this._request("/api/query/sql", {
+            stmt:
+              `SELECT DISTINCT b.root_id AS rid FROM blocks b ` +
+              `INNER JOIN attributes a ON b.id = a.block_id AND a.name = '${aDate}' ` +
+              `WHERE b.type = 'p' LIMIT 2000`,
+          });
+          if (resp && resp.code === 0 && Array.isArray(resp.data)) rows = resp.data;
+        } catch (e) {
+          return;
+        }
+        const rids = rows.map((r) => r.rid).filter((x) => this._validId(x));
+        if (!rids.length) return;
+        showMessage(`${NAME}：正在为 ${rids.length} 篇文档补写番茄速记属性…`);
+        for (const rid of rids) {
+          if (!this._tomatoIdeaOn()) break;
+          try {
+            await this._serial(rid, () => this._syncTomatoAttrs(rid));
+          } catch (e) {
+            console.warn(`${NAME}：补写番茄速记属性失败`, e);
+          }
+        }
+      } finally {
+        this._tomatoBackfilling = false;
+      }
+    }
+
     /* ===================== DOM 自动识别 ===================== */
 
     /* 从段落向上定位所在文档 ID */
@@ -11254,6 +11604,8 @@
         if (state === "tagged") {
           /* 属性已经入库，颜色交给样式表的属性选择器，撤掉临时的内联值 */
           p.style.removeProperty("--tt-c");
+          /* 这条记录的时间变了，本文档的番茄速记间隔要跟着重算 */
+          this._scheduleTomatoSync(docId);
           /* 光标还停在这一行就先不刷侧栏 —— 用户还在写，内容会一次次变，
              跟着刷就是一闪一闪；等他换行或移开光标再统一刷一次。 */
           if (this._isEditingParagraph(p)) this._pendingRefreshParas.add(p);
@@ -11348,8 +11700,12 @@
             }
           }
 
-          /* 记录被删掉了：列表和日历要跟着减一条 */
-          if (removedRecord) this._notifyRecordsChanged();
+          /* 记录被删掉了：列表和日历要跟着减一条；邻居的番茄间隔也要重算
+             （延迟 800ms 才查库 —— 删除要等内核落库，立刻查还会查到它） */
+          if (removedRecord) {
+            this._notifyRecordsChanged();
+            this._scheduleTomatoSync(this._docIdOf(editor));
+          }
 
           /* 待处理的段落累积起来，不要每来一批就把上一批丢掉 ——
              用户很可能是「敲完一行立刻回车」，回车带来的新变动会冲掉上一批，
@@ -11441,6 +11797,8 @@
       let tagged = 0;
       let unchanged = 0;
       let failed = 0;
+      /* 本次扫出新记录的文档：扫完各补一次番茄速记属性的同步 */
+      const tomatoDocs = new Set();
       for (const p of paragraphs) {
         const docId = this._docIdOf(p);
         if (!this._validId(docId)) continue;
@@ -11453,13 +11811,16 @@
           const state = await this._serial(docId, () =>
             this._tagBlock(p.getAttribute("data-node-id"), info, meta.date)
           );
-          if (state === "tagged") tagged++;
-          else if (state === "unchanged") unchanged++;
+          if (state === "tagged") {
+            tagged++;
+            tomatoDocs.add(docId);
+          } else if (state === "unchanged") unchanged++;
           else failed++;
         } catch (e) {
           failed++;
         }
       }
+      if (tomatoDocs.size) tomatoDocs.forEach((d) => this._scheduleTomatoSync(d));
       /* 有新增或更新就顺带把 Dock 与日历刷一遍，省得用户再手点一次刷新 */
       if (tagged > 0) this._notifyRecordsChanged();
       const total = tagged + unchanged + failed;
