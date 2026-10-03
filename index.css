@@ -1013,6 +1013,115 @@
   color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
 }
 
+/* ===================== 统计口径（类型管理弹窗内） =====================
+   每个类型一枚芯片，点一下在 普通 / 只记录 / 起点 之间轮转。
+   档位只靠 .is-off / .is-anchor 两个类表达，后缀文字用 ::after 生成 ——
+   普通档不加字，所以没标过口径的那一排看着和普通芯片一样清爽。
+   颜色一律走 --b3-* 派生（不写死色值），暗亮主题与 Neo 主题都能自己跟上。 */
+
+.tt-types__stat {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--b3-border-color) 25%, transparent);
+}
+.tt-types__stat-head {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--b3-theme-on-background);
+}
+.tt-types__stat-desc {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 60%, transparent);
+}
+.tt-types__stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+/* 前缀 .tt-types 提到 (0,2,0)：主题给 button 设的底色 / 圆角通常比单个类名更具体 */
+.tt-types .tt-types__stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 45%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 75%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+.tt-types .tt-types__stat-chip:hover {
+  border-color: color-mix(in srgb, var(--b3-border-color) 80%, transparent);
+  color: var(--b3-theme-on-background);
+}
+.tt-types .tt-types__stat-chip.is-off {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
+}
+.tt-types .tt-types__stat-chip.is-anchor {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+  background: color-mix(in srgb, var(--b3-theme-primary) 10%, transparent);
+  color: var(--b3-theme-primary);
+}
+.tt-types__stat-chip.is-off::after,
+.tt-types__stat-chip.is-anchor::after {
+  padding-left: 5px;
+  border-left: 1px solid currentColor;
+  font-size: 10px;
+  opacity: 0.75;
+}
+.tt-types__stat-chip.is-off::after {
+  content: "只记录";
+}
+.tt-types__stat-chip.is-anchor::after {
+  content: "起点";
+}
+.tt-types__stat-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
+}
+/* 每一条说明整体是一个盒子：换行时标签不会跟文字分家
+   （直接让标签和文字当兄弟节点的话，文字会被当成独立的 flex item，
+   换行点正好落在标签与文字之间） */
+.tt-types__stat-legenditem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tt-types__stat-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 55%, transparent);
+  border-radius: 4px;
+  font-size: 10px;
+}
+.tt-types__stat-tag.is-off {
+  border-style: dashed;
+}
+.tt-types__stat-tag.is-anchor {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+  color: var(--b3-theme-primary);
+}
+.tt-types__stat-empty {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--b3-theme-on-surface) 55%, transparent);
+}
+
 /* 红色边框宽按钮：仅用于类型管理弹窗内的「重置为默认」 */
 .tt-types__reset {
   display: block;

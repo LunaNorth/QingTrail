@@ -372,6 +372,35 @@
       ? value
       : DEFAULT_TIME_MODE;
 
+  /* ---- 类型的「统计口径」（在时间计算模式之上再细分一层） ----
+     时间区间是在「同一天的记录串」上两两相邻算出来的，但现实里有些记录
+     只是想留一句「我干过这件事」，并不代表一段时长 —— 比如在两个任务中间
+     插入一条喝水，本来只想看两个任务之间的间隔，却被喝水切成了两段。
+     所以给每个类型再挂一个口径，分三档：
+       normal 普通（默认）—— 既吃前一条的间隔，也给下一条当参照；
+       off    只记录      —— 整条退出统计链：自己不计时长，也不给邻居当参照
+                             （邻居会直接跨过它去接再上一条，喝水 / 休息 / 通勤用它）；
+       anchor 起点        —— 不吃穿过它的那段间隔，但从它开始重新计时：
+                             结束模式下它等同于「当天第一条」，
+                             开始模式下它给前一段收尾（前一条不再往下延伸）。
+     只影响**时间区间**：记录条数、习惯打卡、指标取值一切照旧 ——
+     这也是「不写时间就不会进统计，可习惯又检索不到」那条死路的解法。
+     口径挂在类型项自己身上（item.stat），类型改名时跟着走，不用另维护一份名单。 */
+  const DEFAULT_TYPE_STAT = "normal";
+  const TYPE_STAT_OPTIONS = [
+    { value: "normal", label: "普通" },
+    { value: "off", label: "只记录" },
+    { value: "anchor", label: "起点" },
+  ];
+  const normTypeStat = (value) =>
+    TYPE_STAT_OPTIONS.some((o) => o.value === value) ? value : DEFAULT_TYPE_STAT;
+  /* 芯片上的提示语：点一下会切到下一档，所以每档都说清楚「现在是什么」+「点完是什么」 */
+  const TYPE_STAT_TIPS = {
+    normal: "普通：既吃前一条的间隔，也给下一条当参照。点一下改成「只记录」。",
+    off: "只记录：不计入任何时间间隔，邻居会跨过它去接再上一条。点一下改成「起点」。",
+    anchor: "起点：不吃穿过它的那段间隔，从它开始重新计时。点一下改回「普通」。",
+  };
+
   /* 底边线取类型色的百分比：颜色比底色深，保证线条清晰 */
   const MARK_LINE_MIX = 60;
 
@@ -924,6 +953,8 @@
             .map((i) => ({
               name: i.name,
               color: typeof i.color === "string" && i.color ? i.color : (g.color || DEFAULT_TYPE_COLOR),
+              /* 统计口径：老配置里没有这一项，一律补成「普通」 */
+              stat: normTypeStat(i.stat),
             })),
         }));
       /* 指标表：没有就是空数组。刻意不给内置兜底 —— 凭空塞几个指标进去，
@@ -4189,6 +4220,22 @@
       return "";
     }
 
+    /* 一个类型在「时间区间统计」里扮演的角色：normal / off / anchor
+       （三档的含义见文件顶部 TYPE_STAT_OPTIONS 那段说明）。
+       表里没这个名字、或这一项没标过 → normal，
+       所以在类型管理里删掉某个类型 / 改名之后，老记录不会算出奇怪的结果。
+       时间轴、日历、表格、时长统计、习惯、番茄速记的间隔都走这一个判定，
+       口径只有这一处，不会出现「这个视图算进去了、那个没算」。 */
+    _typeStatRole(type) {
+      const name = String(type == null ? "" : type).trim();
+      if (!name) return DEFAULT_TYPE_STAT;
+      for (const g of this.data.typeGroups || []) {
+        const hit = (g.items || []).find((i) => i.name === name);
+        if (hit) return normTypeStat(hit.stat);
+      }
+      return DEFAULT_TYPE_STAT;
+    }
+
     /* 构造类型管理的设置面板：分组 + 分组描述 + 内联类型芯片 */
     _buildTypeSettings() {
       const wrap = document.createElement("div");
@@ -4197,10 +4244,60 @@
         <div class="tt-types__intro">记录的类型，用于进行醒目提醒。主要分为四大类：</div>
         <div class="tt-types__groups"></div>
         <button class="tt-types__group-add" type="button"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconAdd"></use></svg> 添加分组</button>
+        <div class="tt-types__stat">
+          <div class="tt-types__stat-head">统计口径</div>
+          <div class="tt-types__stat-desc">只管时间区间怎么算，记录本身照常保留（列表、日历、习惯、指标都不受影响）。点一下切换。</div>
+          <div class="tt-types__stat-chips"></div>
+          <div class="tt-types__stat-legend">
+            <span class="tt-types__stat-legenditem"><span class="tt-types__stat-tag is-off">只记录</span>不计入任何间隔，邻居跨过它接着算</span>
+            <span class="tt-types__stat-legenditem"><span class="tt-types__stat-tag is-anchor">起点</span>穿过它的那段不算，从它重新计时</span>
+          </div>
+        </div>
         <button class="tt-types__reset" type="button">重置为默认</button>
         <div class="tt-types__hint">颜色变更会立即保存；旧记录的底色需重新执行「扫描并打标」才会刷新。</div>
       `;
       const groupsEl = wrap.querySelector(".tt-types__groups");
+      const statChipsEl = wrap.querySelector(".tt-types__stat-chips");
+
+      /* —— 类型芯片的统计口径：每个类型一枚芯片，点一下在
+            普通 › 只记录 › 起点 三档之间轮转 ——
+         口径存在类型项自己身上（item.stat），但入口放在这里另起一块，
+         不动上面那排类型芯片的版式（一行五枚，加控件就得重排）。
+         芯片上的档位后缀（只记录 / 起点）由 CSS 的 ::after 生成，不再往 DOM 里塞文字。 */
+      const renderStatChips = () => {
+        if (!statChipsEl) return;
+        statChipsEl.innerHTML = "";
+        const seen = new Set();
+        let any = false;
+        (this.data.typeGroups || []).forEach((g) => {
+          (g.items || []).forEach((item) => {
+            const name = ((item && item.name) || "").trim();
+            /* 同名的类型在多处出现只画一枚（配色与统计口径都按首次出现的算） */
+            if (!name || seen.has(name)) return;
+            seen.add(name);
+            any = true;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            const stat = normTypeStat(item.stat);
+            btn.className = `tt-types__stat-chip is-${stat}`;
+            btn.textContent = name;
+            btn.title = TYPE_STAT_TIPS[stat];
+            btn.addEventListener("click", () => {
+              const cur = normTypeStat(item.stat);
+              item.stat = cur === "normal" ? "off" : cur === "off" ? "anchor" : "normal";
+              this._saveTypes();
+              renderStatChips();
+              /* 番茄速记的间隔跟的就是这套口径：开着的话全部重算一遍 */
+              if (this._tomatoIdeaOn()) this._backfillTomatoAttrs();
+            });
+            statChipsEl.appendChild(btn);
+          });
+        });
+        if (!any) {
+          statChipsEl.innerHTML =
+            '<span class="tt-types__stat-empty">还没有类型，先在上面加一个</span>';
+        }
+      };
 
       /* 给 input 按字数设一个 size。宽度现在由样式表的网格布局接管
          （名字框 flex 撑满芯片中间那段、长了截成省略号），
@@ -4236,6 +4333,8 @@
           item.name = nameInput.value.trim();
           fitInput(nameInput, 4);
           this._saveTypes();
+          /* 改名后下面「统计口径」那排芯片的标签跟着走（口径存在类型项上，不会掉） */
+          renderStatChips();
         });
         removeBtn.addEventListener("click", () => {
           this.data.typeGroups[gIdx].items.splice(iIdx, 1);
@@ -4330,6 +4429,8 @@
       const render = () => {
         groupsEl.innerHTML = "";
         this.data.typeGroups.forEach((g, i) => groupsEl.appendChild(groupEl(g, i)));
+        /* 增删类型 / 重置为默认之后，统计口径那排芯片要跟着重铺 */
+        renderStatChips();
       };
 
       /* 暴露给删除按钮复用：重新渲染整个列表（避免 splice 后 index 漂移） */
@@ -4372,7 +4473,7 @@
         desc: g.desc,
         items: (g.items || [])
           .filter((i) => i && i.name)
-          .map((i) => ({ name: i.name, color: i.color })),
+          .map((i) => ({ name: i.name, color: i.color, stat: normTypeStat(i.stat) })),
       }));
       /* 指标表一起归一化后再落盘：没名字的指标（用户正在输入的中间态）会被丢掉，
          免得存进一份带空名的配置，下次打开弹窗多出一个无名卡片 */
@@ -5945,33 +6046,82 @@
                            也不编一个 30 分钟进去 —— 编出来的数字会顺着
                            链条污染下一条的起点，跟 Dock 时间线的口径就岔开了。
        参照的那条一律取它的**节点时间**（range.start），不取它算出来的起止 ——
-       记录自己写明区间（08:30 - 09:30）时，无论选哪个模式都直接采用，不再按模式推。 */
+       记录自己写明区间（08:30 - 09:30）时，无论选哪个模式都直接采用，不再按模式推。
+
+       类型口径（_typeStatRole）在这之上再收一层，两条规矩：
+         ① 「只记录」整条退出统计链 —— 邻居不算它、它也不吃间隔，
+            链接关系只在剩下那串上连（所以摘掉它之后，上一条会直接接到下一条）；
+         ② 「起点」是断点 —— 穿过它的那段间隔不算（结束模式里那段归它自己，
+            开始模式里那段归它的前一条），但它自己照样是下一段的端点。
+       两条合起来正好对上用户的两个场景：
+         「任务1 / 喝水 / 任务2」把喝水设成只记录 → 任务2 直接算 任务1 → 任务2；
+         「… / 11:00 学习结束 / 13:00 起点 / 15:00 学习结束」把那个类型设成起点
+         → 中午那 2 小时不落进任何一条，下午从 13:00 重新起算。 */
     _resolveDayRanges(sorted) {
       const mode = this._timeCalcMode();
-      return sorted.map((x, i) => {
+      /* 记录对象挂在哪个键上，两个调用方各写各的（_statsTypeDurations 用 rec、
+         _calDayRows / _parseCalTimelineRecords 用 record），这里两个都认 ——
+         只认一个的话，另一半视图会静默全部按「普通」算，看不出错但结果不对 */
+      const roles = sorted.map((x) => {
+        const rec = x && (x.rec || x.record);
+        return this._typeStatRole(rec && rec.type);
+      });
+      /* 摘出「只记录」之后的参与链（存的是 sorted 里的下标，保持原有先后） */
+      const chain = [];
+      roles.forEach((r, i) => {
+        if (r !== "off") chain.push(i);
+      });
+      /* 没有参照的那条：只写自己的节点时间，给块一个最小高度，不计时长 */
+      const solo = (anchorMin) => ({
+        start: anchorMin,
+        end: anchorMin + WEEK_DEFAULT_MIN,
+        hasRange: false,
+        dur: 0,
+      });
+      const out = sorted.map(() => null);
+      chain.forEach((idx, k) => {
+        const x = sorted[idx];
         const anchor = x.range.start;
-        const explicitEnd = x.range.end;
-        /* 自己写明的区间：任何模式下都照用 */
-        if (explicitEnd !== null) {
-          return { start: anchor, end: explicitEnd, hasRange: true, dur: explicitEnd - anchor };
-        }
-        /* 开始模式看下一条，结束模式看上一条；两头都没有就看天 */
-        const ref = mode === "start" ? sorted[i + 1] : sorted[i - 1];
-        if (!ref) {
-          return {
+        /* 自己写明的区间：任何模式下都照用 —— 用户手写的起止就是他的意思，
+           插件不再替他推。这段只对**进了统计链**的记录有效：「只记录」的类型
+           压根走不到这里（上面已经摘掉），它标的就是「不计入」，
+           哪怕手写了起止也不计 —— 不然「时长统计」里又冒出它的用时，
+           跟这个开关的字面意思就打架了。 */
+        if (x.range.end !== null) {
+          out[idx] = {
             start: anchor,
-            end: anchor + WEEK_DEFAULT_MIN,
-            hasRange: false,
-            dur: 0,
+            end: x.range.end,
+            hasRange: true,
+            dur: x.range.end - anchor,
           };
+          return;
         }
-        const start = mode === "start" ? anchor : ref.range.start;
-        let end = mode === "start" ? ref.range.start : anchor;
+        const nextIdx = k + 1 < chain.length ? chain[k + 1] : -1;
+        const prevIdx = k > 0 ? chain[k - 1] : -1;
+        if (mode === "start") {
+          /* 下一条是「起点」：本条到它那一段被断点截掉，本条只写节点时间。
+             起点自己是这一段的前端点，照常从它起算（它的下一轮会算出来） */
+          if (nextIdx < 0 || roles[nextIdx] === "anchor") {
+            out[idx] = solo(anchor);
+            return;
+          }
+        } else {
+          /* 本条就是「起点」：跨过它的那一段（前一条 → 本条）不算。
+             它仍然是后面那一条的参照，所以终点时间照给 */
+          if (prevIdx < 0 || roles[idx] === "anchor") {
+            out[idx] = solo(anchor);
+            return;
+          }
+        }
+        const start = mode === "start" ? anchor : sorted[prevIdx].range.start;
+        let end = mode === "start" ? sorted[nextIdx].range.start : anchor;
         /* 起点被写死的区间顶到后面时（如 08:00 - 11:00 之后又记了 10:00），
            给 1 分钟跨度让块站得住；节点时间本身永远不动 */
         if (end <= start) end = start + 1;
-        return { start, end, hasRange: true, dur: end - start };
+        out[idx] = { start, end, hasRange: true, dur: end - start };
       });
+      /* 「只记录」那几条也要有块占位：只写节点时间，不计时长 */
+      return sorted.map((x, i) => out[i] || solo(x.range.start));
     }
 
     /* 解析一天的记录为 { record, range, start, end, hasRange, dur }，时间非法的丢弃。
@@ -10342,7 +10492,12 @@
        start（开始模式）：节点时间为开始时间 —— 区间从当前起到下一条开始，
        持续 = 下一条 − 当前；下一条在次日时按天拆成两段：当天算到 24:00、
        摆在当天最后一条上，00:00 起的余下一段挂到次日时间轴开头。
-       时间解析不出 / 时长非正的记录一律不编区间，只显示原时间文本。 */
+       时间解析不出 / 时长非正的记录一律不编区间，只显示原时间文本。
+
+       类型口径（_typeStatRole）与 _resolveDayRanges 同一套规矩：
+       「只记录」整条退出统计链（邻居直接接再上一条）、「起点」是断点
+       （穿过它的那一段不算）。这里跟那份唯一的差别是本函数按**跨天**排，
+       所以断点也照样跨天生效。 */
     _lifelogTimelineParts(records) {
       const perRecord = new Map();
       const carries = new Map();
@@ -10365,12 +10520,21 @@
         .map((r) => ({ rec: r, min: toMin(r && r.time) }))
         .filter((x) => x.rec && x.rec.date && x.min !== null)
         .sort((a, b) => a.rec.date.localeCompare(b.rec.date) || a.min - b.min);
+      /* 类型口径：先摘掉「只记录」的那几条，邻居只在剩下的链上找 */
+      const roles = list.map((x) => this._typeStatRole(x.rec && x.rec.type));
+      const chain = [];
+      roles.forEach((r, i) => {
+        if (r !== "off") chain.push(i);
+      });
       if (mode === "start") {
-        for (let i = 0; i < list.length; i++) {
-          const cur = list[i];
-          const next = list[i + 1];
-          /* 全部记录里最晚的一条后面没有「下一条」，无法成段 */
-          if (!next) break;
+        for (let k = 0; k < chain.length; k++) {
+          const cur = list[chain[k]];
+          const ni = k + 1 < chain.length ? chain[k + 1] : -1;
+          /* 链上最晚的一条后面没有「下一条」，无法成段 */
+          if (ni < 0) continue;
+          /* 下一条是「起点」：这一段被断点截掉，本条只显示自己的时间 */
+          if (roles[ni] === "anchor") continue;
+          const next = list[ni];
           let endMin = next.min;
           let endText = next.rec.time;
           if (next.rec.date !== cur.rec.date) {
@@ -10395,11 +10559,13 @@
           }
         }
       } else {
-        for (let i = 1; i < list.length; i++) {
-          const cur = list[i];
-          const prev = list[i - 1];
+        for (let k = 1; k < chain.length; k++) {
+          const cur = list[chain[k]];
+          const prev = list[chain[k - 1]];
           /* 只认同日上一条：隔夜的时长挂到次日第一条会横跨一整晚，不硬接 */
           if (prev.rec.date !== cur.rec.date) continue;
+          /* 本条是「起点」：跨过它的那一段（前一条 → 本条）不算 */
+          if (roles[chain[k]] === "anchor") continue;
           const dur = cur.min - prev.min;
           if (dur <= 0) continue;
           perRecord.set(cur.rec.id, {
@@ -11281,22 +11447,40 @@
       const recs = rows
         .map((r) => {
           const info = parseLine(r.content || "");
-          return info ? { id: r.id, min: toMin(info.time), time: info.time } : null;
+          return info
+            ? { id: r.id, min: toMin(info.time), time: info.time, type: info.type }
+            : null;
         })
         .filter((x) => x && x.min !== null)
         /* 同分钟的先后无所谓，但要有个确定的次序 —— 以块 ID 决胜负 */
         .sort((a, b) => a.min - b.min || (a.id < b.id ? -1 : 1));
       if (!recs.length) return;
-      /* 间隔口径 = 时间计算模式：end（默认）当前 − 上一条；start 下一条 − 当前。
-         没有邻居（第一条 / 最后一条）或间隔非正 → 空串 = 不该有这个属性 */
+      /* 间隔口径 = 时间计算模式 + 类型统计口径（_typeStatRole）：
+         end（默认）当前 − 上一条；start 下一条 − 当前。
+         「只记录」的类型整条退出这条链（间隔一律留空），「起点」是断点 ——
+         跟时间轴 / 表格 / 统计同一套规矩，本插件不给对方插件算第二套数。
+         没有邻居（第一条 / 最后一条）、邻居是断点、或间隔非正 → 空串 = 不该有这个属性 */
       const mode = this._timeCalcMode();
+      const roles = recs.map((x) => this._typeStatRole(x.type));
+      const chain = [];
+      roles.forEach((r, i) => {
+        if (r !== "off") chain.push(i);
+      });
+      /* 先全部按「没有间隔」铺底：只记录的那几条天然就落在这个底上 */
       const want = new Map();
-      for (let i = 0; i < recs.length; i++) {
+      recs.forEach((x) => want.set(x.id, { time: x.time, interval: "" }));
+      for (let k = 0; k < chain.length; k++) {
+        const i = chain[k];
         let dur = null;
         if (mode === "start") {
-          if (i + 1 < recs.length) dur = recs[i + 1].min - recs[i].min;
+          const j = k + 1 < chain.length ? chain[k + 1] : -1;
+          /* 下一条是「起点」：这一段被断点截掉 */
+          if (j >= 0 && roles[j] !== "anchor") dur = recs[j].min - recs[i].min;
         } else {
-          if (i > 0) dur = recs[i].min - recs[i - 1].min;
+          /* 本条是「起点」：跨过它的那一段不算 */
+          if (k > 0 && roles[i] !== "anchor") {
+            dur = recs[i].min - recs[chain[k - 1]].min;
+          }
         }
         want.set(recs[i].id, {
           time: recs[i].time,
