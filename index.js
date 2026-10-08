@@ -44,20 +44,31 @@
     metric: "指标",
   };
 
-  /* —— 番茄速记对接 ——
-     开关打开后每条记录额外写这两个**固定名字**的属性，供番茄速记等插件读取。
-     刻意不跟随「属性名前缀」设置：对方插件按这两个名字原样来读，一字不能差。
-       time     = 记录的「当下时间」，与 custom-<前缀>-time 同值（15:42）；
-       interval = 与相邻记录的间隔分钟数（7m、90m），算法跟随「时间计算模式」：
-                  结束模式（默认）= 当前 − 上一条；开始模式 = 下一条 − 当前。
-                  没有相邻记录（文档里第一条 / 最后一条）或间隔非正的不写，
-                  与时间轴「持续」的口径一致。 */
-  const TOMATO_IDEA_TIME_ATTR = "custom-tomato-idea-time";
-  const TOMATO_IDEA_INTERVAL_ATTR = "custom-tomato-idea-interval";
-  /* 记录改动后延迟多久做一次番茄属性同步：太紧跟在删除后面查库，
+  /* —— 「间隔」块属性 ——
+     表格 / 时间轴里的「间隔」列是渲染时现算的，块上没地方存，
+     所以代码片段 / 主题想在块上直接把间隔显示出来，就得先把它落成块属性。
+     键名跟随「属性名前缀」设置：custom-<前缀>-interval（默认 custom-lifelog-interval），
+     与 custom-lifelog-time / -type / -content 同一族。
+     值是表格那一列的原文（8分 / 1时22分），算法跟随「时间计算模式」+ 类型统计口径：
+       结束模式（默认）= 当前 − 上一条；开始模式 = 下一条 − 当前；
+       「只记录」的类型整条退出链，「起点」是断点；
+       没有邻居（文档里第一条 / 最后一条）或间隔非正 → 空串（把属性清掉）。
+     ⚠️ 2026-10-08 的历史教训：这里原先写的是番茄速记那两个**固定名字**的属性
+     （custom-tomato-idea-time / -interval，专供番茄工具箱读取）。那是别人家的槽位 ——
+     番茄工具箱的 calcTimeInterval 会按**块的创建时间**重算同一个属性再覆盖回来，
+     记录时间被事后改过时两边数字就分叉，同一个块一会儿 55m 一会儿 12m。
+     现在只写自己家的属性：单一写入方，结构上不可能再被覆盖。 */
+  const LIFELOG_INTERVAL_KEY = "interval";
+  /* 时长文案：与时间轴 / 表格里的 fmtDur 同一份口径（>60 分钟走「N时M分」） */
+  const fmtDurText = (min) => {
+    const h = Math.floor(min / 60);
+    const mm = min % 60;
+    return h > 0 ? `${h}时${mm}分` : `${mm}分`;
+  };
+  /* 记录改动后延迟多久做一次间隔属性同步：太紧跟在删除后面查库，
      内核可能还没把块删掉，算出来的邻居就是错的；顺带把连续打字 /
      批量扫描攒成一次。 */
-  const TOMATO_SYNC_DELAY = 800;
+  const INTERVAL_SYNC_DELAY = 800;
 
   /* ---- 指标（从记录内容里抽数值画折线） ----
      指标 = 一条「从记录内容里抽出来的数值序列」：内容里写「体重 65.5」，就有对应的体重走势。
@@ -72,6 +83,11 @@
        scale    默认尺度：日 / 周 / 月 —— 同一份数据换个粒度看，这就是「看大类」
        bucket   同一个桶里落进多条记录时怎么并成一个点
        decimals 小数位、unit 单位、target 目标值（可选）、color 颜色
+       default  默认值（可选）：窗口里**没记录到**的那个桶用它补点 ——
+                「连续天数」这类每天都有意义、断一天就该归零的数字最需要它，
+                没记录的那天照样有点，折线不会断成一截一截
+       ref      参考线（可选）：打开后在折线图上按全部数据画三条横向虚线 ——
+                最大值（顶）、平均值（中）、最小值（底），与手填的 target 线并存
      存储结构照抄 typeGroups（{name, desc, items}），管理弹窗复用那套 .tt-modal 骨架。 */
   const METRIC_PICKS = [
     { value: "last", label: "最后一个" },
@@ -124,10 +140,30 @@
                 坏习惯反过来，达标不上色、超出才上色，超得越多颜色越深）；
        周 / 月目标 → 周期内**累计**进度的步进带（有记录 = 等级 1，≥25% = 2，≥50% = 3，
                 ≥75% = 4，≥100% = 5）—— 一天一天看着累计条往目标走。
-     连续 / 最长按各自周期结算：日目标数天、周目标数周、月目标数月。 */
+     连续 / 最长按各自周期结算：日目标数天、周目标数周、月目标数月。
+
+     ---- 三条「内容口径」（2026-10-08 新增，全部照 指标模块 的 match/exclude 语义）----
+     原先一个习惯只认「类型」：同类型的记录统统算数。可有时候同一个类型里
+     只有一部分内容真的算这个习惯（「运动」下面「跑步 5 公里」算、「拉伸 3 分钟」不想算），
+     这时候就需要按**内容**再筛一道：
+       match    命中词：内容里出现任一个才算（留空 = 全都要，老配置零迁移）
+       exclude  排除词：出现就跳过（优先级高于命中词）
+       num      数字次数：打开后，一条记录贡献的「次数」不再是固定的 1，
+                而是**从内容里抽出的数字**（「做了 20 个俯卧撑」→ 20 次），
+                一条内容里多个数字时按 pick 那档合并（默认求和）。
+                抽不到数字的记录贡献 0 —— 它确实没说自己做了几个。
+     筛出来的每条记录，时长（分钟口径）仍按原样累加，与这三条互不干扰。 */
   const HABIT_UNITS = [
     { value: "count", label: "次数" },
     { value: "min", label: "分钟" },
+  ];
+  /* 「数字次数」一条内容里出现多个数字时怎么并成一个（默认求和 —— 计次场景最自然） */
+  const HABIT_NUM_PICKS = [
+    { value: "sum", label: "求和" },
+    { value: "last", label: "最后" },
+    { value: "max", label: "最大" },
+    { value: "min", label: "最小" },
+    { value: "avg", label: "平均" },
   ];
   /* 旧版 5 档阶梯已退役：等级色改由目标值自动推导（见文件头「习惯视图」说明），
      这里只保留「目标值兜底」—— 迁移不出目标值时按单位给默认 */
@@ -226,17 +262,41 @@
      MIN_BLOCK 是块的最小高度，避免极短的活动被压成一条看不见的线。
      SHOW_TIME 是「放得下两行」的高度门槛 —— 低于它就改成标题与时间同一行，
      硬塞两行会被裁掉半行，比挤一行更难看。
-     DEFAULT_MIN 给「没有参照」的那一条用（结束模式的当天首条、开始模式的当天末条）：
-     它没有相邻记录可推算，只能按这个默认跨度摆一块，且不计入时长统计。 */
+     「没有参照」的那一条（结束模式的当天首条 / 开始模式的当天末条 / 起点）不给跨度，
+     块高直接落到 MIN_BLOCK —— 详见 _resolveDayRanges 里 solo() 的说明。 */
   const WEEK_HOUR_H = 40;
   const WEEK_MIN_BLOCK_H = 22;
   const WEEK_SHOWTIME_H = 36;
-  const WEEK_DEFAULT_MIN = 30;
   /* 相邻块之间的最小空隙：记录工具的记录常常几分钟一条，块又保底 22px 高，
      按时间比例硬摆必然叠字。摆块时保证相邻块至少隔这么多像素。 */
   const WEEK_EVENT_GAP = 2;
   /* 进入时间轴视图时先滚到这里（小时数）：活动基本都在白天，从 00:00 开始要滚很久 */
   const WEEK_INITIAL_HOUR = 7;
+
+  /* 每小时高度的档位（px）。Ctrl+滚轮 在这些档位之间走，设置里那个下拉也用
+     同一份清单 —— 两边共用一个值，不会出现「滑轮滚过之后设置对不上」。
+     ⚠️ 它是**基准**高：记录密集的小时仍会在它之上被 _calTimelineLayout 撑高。
+     缩放窗口上下限就是清单首尾，别把档位写到 16 以下（刻度文字会挤在一起）。 */
+  const TL_HOUR_STEPS = [24, 32, 40, 60, 80, 120, 160, 240];
+  /* 单个小时最多被撑到基准的多少倍。
+     这是个**兜底闸**：撑高的目标是「本小时起始的那些记录都留在本小时的刻度带里」，
+     但记录全挤在一小时最后一分钟时，那个方程的解会发散（f→1 时分母趋零）。
+     超过这个倍率就停止撑高，让那一小时溢出 —— 用一个能看的视图换极端情况下的
+     严格贴合（用户可以把小时高调大，闸门按倍率同步放大，再密集也压得住）。 */
+  const TL_HOUR_MAX_RATIO = 16;
+  /* 单个小时「需要多高」的不动点迭代上限（轮）。
+     需要多高是自身高度的函数，斜率 = 本小时最靠后的块起始偏移（<1），
+     所以单调收敛，轮数只影响逼近精度：块起始整点附近 → 一两轮定死；
+     块全挤在本小时最后一分钟（斜率→1）→ 要几十轮。
+     取 128 是给「一小时里十几个每分钟一条」这类真实可达的密集情况留足余量，
+     成本可忽略（真跑满 128 轮只会出现在极端密集的小时，且每轮只是扫一遍
+     本小时的记录；值一旦不再变化就 break，稀疏小时一轮都不多跑）。 */
+  const TL_SOLVE_ROUNDS = 128;
+  /* 档位清单里找不到时回落到哪一档（也是默认值） */
+  const TL_HOUR_DEFAULT = WEEK_HOUR_H;
+  /* 时间轴视图里「光标下那一分钟」的暂存：Ctrl+滚轮 重绘后照它还原滚动位置，
+     缩放才会以光标为中心而不是整体跳走。用一次就清。 */
+  /* （字段是 this._calTabWvScrollAnchor，结构 { min, offset }） */
 
   /* 思源块 / 文档 ID，避免把外部文本拼进 SQL */
   const ID_RE = /^[0-9a-z-]{8,64}$/;
@@ -270,6 +330,11 @@
 
   /* 动态标记样式的 style 元素 id：按块属性把类型颜色映射到 --tt-c */
   const MARK_STYLE_ID = "tt-mark-style";
+
+  /* 间隔角标样式的 style 元素 id：把记录间隔贴到块正文右侧。
+     这一步纯粹是 CSS（::after + attr(属性名)），所以能随前缀变化整体重建，
+     不需要任何逐块 JS —— 详见 _ensureIntervalStyle()。 */
+  const INTERVAL_STYLE_ID = "tt-interval-style";
 
   /* 「思维导图视图」范围识别，用法见 _isInListMindmap()。
      思源两代之间把这套记号改过名，所以显式记号 + 模糊兜底都留着 ——
@@ -423,6 +488,11 @@
       list.some((o) => o.value === v) ? v : dflt;
     const dec = Math.round(Number(m.decimals));
     const target = s(m.target) === "" ? null : Number(m.target);
+    /* 默认值：窗口里**没记录到**的那个桶用它补（null = 不补，老行为）。
+       「连续天数」这类每天都有意义、断一天就该归零的数字最需要它 ——
+       没记录的那天照样有点，折线不会断成一截一截。 */
+    const dfltRaw = s(m.default) === "" ? null : Number(m.default);
+    const dflt = dfltRaw !== null && Number.isFinite(dfltRaw) ? dfltRaw : null;
     return {
       name: s(m.name),
       unit: s(m.unit),
@@ -442,6 +512,11 @@
       bucket: METRIC_BUCKETS.some((o) => o.value === m.bucket) ? m.bucket : "",
       decimals: Number.isFinite(dec) ? Math.max(0, Math.min(4, dec)) : 1,
       target: target !== null && Number.isFinite(target) ? target : null,
+      default: dflt,
+      /* 参考线：打开后在折线图上画三条横向虚线 —— 最大值（顶）、平均值（中）、
+         最小值（底），各带一个数值标签；与上面手填的「目标值」线并存。
+         默认关（老配置没有这个键，读出来就是关，零迁移）。 */
+      ref: m.ref === true || m.ref === "on" || m.ref === "true",
     };
   };
 
@@ -828,9 +903,9 @@
       super(options);
       /* 每个文档一个串行队列，避免属性读写相互穿插 */
       this._serialQueues = new Map();
-      /* 番茄速记属性的同步防抖定时器（key = 文档 ID）与补写进行中的标记 */
-      this._tomatoSyncTimers = new Map();
-      this._tomatoBackfilling = false;
+      /* 间隔属性同步的防抖定时器（key = 文档 ID）与补写进行中的标记 */
+      this._intervalSyncTimers = new Map();
+      this._intervalBackfilling = false;
       /* 文档元信息缓存：id → { date, daily } */
       this._docMeta = new Map();
       this._observers = [];
@@ -973,8 +1048,26 @@
       this.data.recordScope = normRecordScope(this.data.recordScope);
       /* 时间计算模式：默认结束模式，只接受候选档位 */
       this.data.timeCalcMode = normTimeMode(this.data.timeCalcMode);
+      /* 间隔属性：默认开 —— 记录本来就自带 time / type / content 一串属性，
+         再多一个同族的 interval 不突兀，代码片段 / 主题才有东西可显示。
+         老配置里这一项叫 tomatoIdeaAttrs（那会儿写的是番茄插件的槽位），
+         只把「明确关过」的意图继承过来，其余一律按默认开。 */
+      if (typeof this.data.intervalAttrs !== "boolean") {
+        this.data.intervalAttrs = this.data.tomatoIdeaAttrs !== false;
+      }
+      delete this.data.tomatoIdeaAttrs;
+      /* 间隔显示：默认开 —— 装上直接在块上看到间隔，不必再自己装一段 CSS 代码片段
+         （原「记录间隔显示片段 v5」的功能已收进插件，见 _ensureIntervalStyle）。
+         它只管「显示」，与「间隔属性」解耦：关掉显示，interval 属性照写，
+         主题 / 自己写片段的用户照样能取到数据。 */
+      if (typeof this.data.intervalBadge !== "boolean") {
+        this.data.intervalBadge = true;
+      }
       /* 日历数据源：默认 LifeLog 记录，与旧行为一致；旧配置里没这项时补上 */
       this.data.calendarSource = normCalSource(this.data.calendarSource);
+      /* 时间轴每小时基础高度（缩放基准）：默认 40px。
+         统一夹到档位上，读的时候才不会出现「配置里是 43、设置里显示 40」。 */
+      this.data.tlHourH = this._tlBaseHFrom(this.data.tlHourH);
       /* 下划线线宽：默认 0.75px，只接受候选档位 */
       this.data.markLineWidth = normLineWidth(this.data.markLineWidth);
       /* 记录行底色：默认关闭，可选 1% 到 10% */
@@ -983,6 +1076,24 @@
       this.data.dockVisible = this.data.dockVisible === true;
       /* 生成「块属性 到 --tt-c」的样式映射 */
       this._ensureMarkStyle();
+      /* 生成间隔角标样式（把记录间隔贴到正文右侧；纯 CSS，零逐块开销） */
+      this._ensureIntervalStyle();
+
+      /* 一次性补写：interval 是后加的属性，老记录上还没有，
+         装上带间隔属性的版本后第一件事就是把历史记录补齐一次
+         （代码片段 / 主题才有东西可显示）。
+         标记只在**补写跑完**之后才落盘：中途退出 / 报错的话下次启动自动重来，
+         免得留下「标了却没补全」的僵尸状态。 */
+      if (this._intervalAttrOn() && !this.data.intervalBackfilled) {
+        setTimeout(() => {
+          this._backfillIntervalAttrs()
+            .then(() => {
+              this.data.intervalBackfilled = true;
+              this._persist("保存间隔属性补写标记");
+            })
+            .catch(() => {});
+        }, 4000);
+      }
 
       /* Ctrl+Alt+N：打开（已开着则聚焦到）日历标签页，跟顶栏那枚日历图标同一个入口。
          为什么用命令而不是 Dock 的 hotkey —— Dock 的快捷键语义固定是「开关那个侧栏面板」，
@@ -1082,6 +1193,11 @@
       if (markStyle && markStyle.parentNode) {
         markStyle.parentNode.removeChild(markStyle);
       }
+      /* 移除动态注入的间隔角标样式（同理由插件注入，卸载时一并撤掉） */
+      const intervalStyle = document.getElementById(INTERVAL_STYLE_ID);
+      if (intervalStyle && intervalStyle.parentNode) {
+        intervalStyle.parentNode.removeChild(intervalStyle);
+      }
       /* 移除下拉的全局外部点击监听 */
       if (this._cddlDocClick) {
         document.removeEventListener("click", this._cddlDocClick);
@@ -1118,13 +1234,13 @@
         clearTimeout(this._recordsRefreshTimer);
         this._recordsRefreshTimer = null;
       }
-      /* 番茄速记属性同步的防抖定时器一并清掉 */
-      this._tomatoSyncTimers.forEach((t) => {
+      /* 间隔属性同步的防抖定时器一并清掉 */
+      this._intervalSyncTimers.forEach((t) => {
         try {
           clearTimeout(t);
         } catch (e) {}
       });
-      this._tomatoSyncTimers.clear();
+      this._intervalSyncTimers.clear();
       /* 摘掉光标监听 */
       if (this._onSelectionChange) {
         document.removeEventListener("selectionchange", this._onSelectionChange);
@@ -1388,28 +1504,56 @@
             const label =
               (TIME_MODE_OPTIONS.find((o) => o.value === mode) || {}).label || mode;
             showMessage(`${NAME}：时间计算模式已改为「${label}」`);
-            /* 番茄速记的间隔跟的就是这套口径：开着的话全部重算一遍 */
-            if (this._tomatoIdeaOn()) this._backfillTomatoAttrs();
+            /* 间隔（含轻迹自己的间隔属性）跟的就是这套口径：全部重算一遍 */
+            this._backfillIntervalAttrs();
           },
         })
       );
 
-      /* —— 控制设置：番茄速记属性 ——
-         不是每个用户都需要，默认关。开启后新增 / 修改的记录都会带上
-         custom-tomato-idea-time 与 custom-tomato-idea-interval 两个属性
-         （名字固定，不跟随属性名前缀 —— 对方插件按原名读），
-         并把历史记录补写一遍；关掉只停新写，已写入的属性保留（数据不丢）。 */
+      /* —— 控制设置：间隔属性 ——
+         开启后每条记录额外写 custom-<前缀>-interval（相邻间隔，如 55分 / 1时22分），
+         代码片段 / 主题靠它在块上直接显示间隔。
+         口径与时间轴 / 表格 / 统计完全同源：时间计算模式（end / start）+
+         类型统计口径（只记录不参与、起点截断）；首条记录或「起点」不带值，
+         块上就不显示，跟表格里的「—」一致。
+         只写自己家的属性 —— 原先写的是番茄速记那两个固定名字（对方插件的槽位），
+         会被番茄工具箱按块创建时间覆盖回来，见文件头那段教训。
+         关掉只停新写，已写入的属性保留（数据不丢）。 */
       controlCard.appendChild(
         this._buildRow({
-          title: "番茄速记属性",
+          title: "间隔属性",
           desc:
-            "开启后每条记录额外写 tomato-idea-time（当下时间）与 tomato-idea-interval（相邻间隔，如 7m）两个属性，默认关闭。",
+            "开启后每条记录额外写 interval 属性（相邻间隔，如 55分 / 1时22分），口径与时间轴、表格一致；块上的显示交给下面的「间隔显示」。",
           controlType: "toggle",
-          value: !!this.data.tomatoIdeaAttrs,
+          value: !!this.data.intervalAttrs,
           onChange: (v) => {
-            this.data.tomatoIdeaAttrs = v;
-            this._persist("保存番茄速记属性开关");
-            if (v) this._backfillTomatoAttrs();
+            this.data.intervalAttrs = v;
+            this._persist("保存间隔属性开关");
+            if (v) this._backfillIntervalAttrs();
+            /* 显示依赖这个开关，跟着联动 */
+            this._ensureIntervalStyle();
+          },
+        })
+      );
+
+      /* —— 控制设置：间隔显示 ——
+         原「记录间隔显示片段 v5」那段 CSS 的功能已收进插件：开启后间隔直接贴在
+         块正文右侧，不必再自己去装代码片段、也不必担心插件升级后片段失效。
+         实现是纯 CSS（::after + attr(属性名)），浏览器只做 paint ——
+         若改成 JS 给每个块插一个角标元素，就是每条记录一次 DOM 写 + 一次重排，
+         几百条记录就够卡了，文档每次重渲染还得重插一遍。这里零 JS、零监听。
+         关掉只停显示，interval 属性照写 —— 自己用主题 / 片段接管显示的人不必二选一。 */
+      controlCard.appendChild(
+        this._buildRow({
+          title: "间隔显示",
+          desc:
+            "开启后把间隔直接贴在块正文右侧（需「间隔属性」为开），无需再装代码片段。纯 CSS，零额外开销；关掉只停显示，属性照写。",
+          controlType: "toggle",
+          value: this._intervalBadgeOn(),
+          onChange: (v) => {
+            this.data.intervalBadge = v;
+            this._persist("保存间隔显示开关");
+            this._ensureIntervalStyle();
           },
         })
       );
@@ -1434,6 +1578,8 @@
           showMessage(`${NAME}：属性名已改为 custom-${pfx}-*，此后新记录生效`);
           /* 前缀变了：重建标记样式，作废缓存并强制重查 */
           this._ensureMarkStyle();
+          /* 间隔角标的 CSS 里写的就是属性名，前缀一变必须一起重建 */
+          this._ensureIntervalStyle();
           this._lifelogDockCache = null;
           this._lifelogDockCacheTime = 0;
           this._refreshLifeLogDockContent(true);
@@ -1503,6 +1649,32 @@
           onChange: (v) => {
             this.data.calShowIcon = v;
             this._persist("保存时间图标");
+            this._refreshCalendarTabs();
+          },
+        })
+      );
+
+      /* —— 时间轴缩放：每小时基础高度 ——
+         Ctrl+滚轮 改的就是这个值（两边共用 TL_HOUR_STEPS 一份档位清单，
+         所以滑轮滚过之后这里显示的一定是同一个数）。
+         它同时是「弹性撑高」的基准：记录密集的小时仍会在它之上被撑高，
+         而撑高的闸门（TL_HOUR_MAX_RATIO）按倍率走 —— 数据特别密时把它调大，
+         记录就能压回自己所属的刻度带里。默认 40px。 */
+      controlCard.appendChild(
+        this._buildRow({
+          title: "时间轴小时高",
+          desc:
+            "每小时占多少像素，决定时间轴（周 / 三日 / 日）的疏密。也可以在视图里按住 Ctrl 滚动鼠标滚轮缩放（以光标位置为中心）。",
+          controlType: "select",
+          options: TL_HOUR_STEPS.map((v) => ({
+            value: String(v),
+            label: `${v} px / 小时${v === TL_HOUR_DEFAULT ? "（默认）" : ""}`,
+          })),
+          value: String(this._tlBaseH()),
+          onChange: (v) => {
+            const want = Number(v);
+            if (this._tlBaseH() === want) return;
+            this._setTlBaseH(want);
             this._refreshCalendarTabs();
           },
         })
@@ -1708,6 +1880,29 @@
               : `<span class="tt-habitpick__dnote">留空 = 一直都在</span>`
           }
                 </div>`;
+          /* 内容口径三件套：命中词 / 排除词 / 数字次数。
+             命中词与排除词留空 = 不按内容筛（老习惯的默认行为，零迁移）；
+             「数字次数」打开后，一条记录记几次不再固定为 1，而是看它内容里的数字
+             —— 右边那排选「一条内容里出现多个数字时怎么并」。 */
+          const numRow = `<div class="tt-habitpick__kwrow">
+                    <label class="tt-habitpick__kw"><span>命中词</span><input type="text" maxlength="60" value="${escapeHtml(
+                      cfg.match || ""
+                    )}" placeholder="内容含这个词才算（留空 = 全都要）" data-habit-match autocomplete="off"></label>
+                    <label class="tt-habitpick__kw"><span>排除词</span><input type="text" maxlength="60" value="${escapeHtml(
+                      cfg.exclude || ""
+                    )}" placeholder="出现就跳过" data-habit-exclude autocomplete="off"></label>
+                </div>
+                <div class="tt-habitpick__numrow">
+                    <button type="button" class="tt-habitpick__numon${
+                      cfg.num ? " on" : ""
+                    }" data-habit-num>数字次数</button>
+                    ${cfg.num ? segHtml(HABIT_NUM_PICKS, cfg.pick, "pick") : ""}
+                    <span class="tt-habitpick__numhint">${
+                      cfg.num
+                        ? "一条记录记几次 = 它内容里的数字（多个按左边那档并，抽不到数字记 0 次）"
+                        : "打开后：一条记录记几次按它内容里的数字算，而不是固定 1 次"
+                    }</span>
+                </div>`;
           return `<div class="tt-habitpick__cfg" data-habit-cfg="${escapeHtml(
             type
           )}" style="--tt-c:${escapeHtml(color)}">
@@ -1754,13 +1949,14 @@
                     </span>
                 </div>
                 ${dateRow}
+                ${numRow}
             </div>`;
         })
         .join("");
       host.innerHTML =
         `<div class="tt-habitpick__chips">${chips}</div>` +
         (cfgs
-          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。「浅档」= 等级 1（打卡量最少那种）的深浅，只影响这个习惯：一天就记一次的习惯选「适中 / 较深」后，年视图里的格子更容易看见。另外，每个习惯想看的时段本来就不一样（打卡看「近 100 天」，另一个只看「本月」）—— 习惯卡名字旁边那枚日期胶囊可以给单个习惯单独设「查看窗口」，互不干扰；没设过的习惯继续跟习惯页顶部那排段位走。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
+          ? `<div class="tt-habitpick__hint">下面给每个习惯配目标模型：好习惯达到目标算达标，坏习惯低于目标算达标（比如「玩手机每天 &lt; 2 小时」）。日目标按天结算；周 / 月目标可选「合计」（整段周期累计达到目标值）或「天数」（周期内达标 N 天）。热力图的 5 级色由目标值自动推导 —— 日目标按目标的倍数，周 / 月目标按周期内累计进度，不用手填档位。「浅档」= 等级 1（打卡量最少那种）的深浅，只影响这个习惯：一天就记一次的习惯选「适中 / 较深」后，年视图里的格子更容易看见。另外，每个习惯想看的时段本来就不一样（打卡看「近 100 天」，另一个只看「本月」）—— 习惯卡名字旁边那枚日期胶囊可以给单个习惯单独设「查看窗口」，互不干扰；没设过的习惯继续跟习惯页顶部那排段位走。最后两行是「内容口径」：一个习惯原先只认「类型」（同类型记录统统算数），填了<b>命中词</b>之后就只认内容里出现了这些词的记录，<b>排除词</b>再把其中不想算的挑出去（比如「运动」类型里只想数「跑步」、把「拉伸」排除），留空则完全不筛；<b>数字次数</b>打开后，一条记录记几次不再固定为 1，而是读它内容里的数字（「做了 20 个俯卧撑」→ 20 次），一条内容里有多个数字时按旁边那档合并，抽不到数字的记录记 0 次。这三样只影响「哪些记录算数、一条算几次」，时长（分钟口径）照旧按记录本身累加。</div><div class="tt-habitpick__cfgs">${cfgs}</div>`
           : "");
       /* 用 onclick / onchange 覆盖式绑定：每次重排都重新赋值，监听不会越挂越多 */
       host.onclick = (e) => {
@@ -1838,8 +2034,22 @@
           this._refreshCalendarTabs();
           return;
         }
-        /* 五段切换（单位 / 方向 / 周期 / 计法 / 浅档）共用一套逻辑 */
-        const ATTRS = ["unit", "dir", "period", "gunit", "lv1"];
+        /* 「数字次数」开关：只翻一个布尔再重排 —— 打开后右边才长出「取值」那排，
+           所以要 _mountHabitPicker 而不是只切个 class。 */
+        const numBtn = e.target.closest && e.target.closest("[data-habit-num]");
+        if (numBtn) {
+          const box = numBtn.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          cfg.num = !cfg.num;
+          this._habitSetConfig(type, cfg);
+          this._mountHabitPicker(host);
+          this._refreshCalendarTabs();
+          return;
+        }
+        /* 六段切换（单位 / 方向 / 周期 / 计法 / 浅档 / 数字次数的取值）共用一套逻辑 */
+        const ATTRS = ["unit", "dir", "period", "gunit", "lv1", "pick"];
         for (const attr of ATTRS) {
           const btn = e.target.closest && e.target.closest(`[data-habit-${attr}]`);
           if (!btn) continue;
@@ -1896,6 +2106,25 @@
           cfg.alias = String(aliasInput.value == null ? "" : aliasInput.value).trim();
           this._habitSetConfig(type, cfg);
           aliasInput.value = cfg.alias;
+          this._refreshCalendarTabs();
+          return;
+        }
+        /* 内容口径：命中词 / 排除词。两个都是「空格 / 逗号分隔的多个词」
+           （拆词交给 metricKw，与指标共用同一套分隔符），失焦或回车才落盘。 */
+        const kwInput = e.target.closest && e.target.closest("[data-habit-match]");
+        const exInput = kwInput
+          ? null
+          : e.target.closest && e.target.closest("[data-habit-exclude]");
+        if (kwInput || exInput) {
+          const box = (kwInput || exInput).closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          if (kwInput) cfg.match = String(kwInput.value == null ? "" : kwInput.value).trim();
+          else cfg.exclude = String(exInput.value == null ? "" : exInput.value).trim();
+          this._habitSetConfig(type, cfg);
+          if (kwInput) kwInput.value = cfg.match;
+          else exInput.value = cfg.exclude;
           this._refreshCalendarTabs();
           return;
         }
@@ -2877,13 +3106,59 @@
         : `${Number(m[2])}/${Number(m[3])}`;
     }
 
-    /* 一段文本里的所有数字。三处归一化都是给真实写法准备的：
-       全角数字（中文输入法下很容易打出来）、全角小数点、
-       千分位逗号（「12,000 步」别被拆成 12 和 0）。 */
+    /* 窗口里**所有**桶键（升序）。只给「默认值」用：有记录的天照常出点，
+       没记录的那天也得有个点，折线才不会断成一截一截。
+       日 / 周按天步进（周落在它所在周的起始日，跟着设置里的「一周从周几开始」），
+       月按月步进。**铺出来的桶最多 4000 个**再兜一道 —— 「全部」窗口 + 日尺度下
+       数据攒了十几年时，不能让一张图画上万条竖线、活活卡死渲染。
+       （调用方还会把「真有数据的桶」并进来，所以最终横轴可能比 4000 略多几个。） */
+    _metricBucketKeysIn(from, to, scale) {
+      const out = [];
+      const p = (k) => {
+        const m = String(k || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+      };
+      const a = p(from);
+      const b = p(to);
+      if (!a || !b || a > b) return out;
+      const seen = new Set();
+      const push = (d) => {
+        const key = this._metricBucketKey(this._calKey(d), scale);
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(key);
+        }
+      };
+      if (scale === "month") {
+        const cur = new Date(a.getFullYear(), a.getMonth(), 1);
+        const end = new Date(b.getFullYear(), b.getMonth(), 1);
+        while (cur <= end && out.length < 4000) {
+          push(cur);
+          cur.setMonth(cur.getMonth() + 1);
+        }
+        return out;
+      }
+      const cur = new Date(a);
+      if (scale === "week") {
+        const ws = this._calWeekStart();
+        cur.setDate(cur.getDate() - ((cur.getDay() - ws + 7) % 7));
+      }
+      const step = scale === "week" ? 7 : 1;
+      while (cur <= b && out.length < 4000) {
+        push(cur);
+        cur.setDate(cur.getDate() + step);
+      }
+      return out;
+    }
+
+    /* 一段文本里的所有数字。四处归一化都是给真实写法准备的：
+       全角数字、全角小数点、全角逗号（中文输入法下很容易打出来）、
+       千分位逗号（「12,000 步」「１２，０００ 步」都别被拆成两个数）。 */
     _metricNumbers(text) {
       const s = String(text == null ? "" : text)
         .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
         .replace(/[．]/g, ".")
+        .replace(/[，]/g, ",")
         .replace(/(\d),(?=\d{3}(?:\D|$))/g, "$1");
       const out = [];
       const re = /-?\d+(?:\.\d+)?/g;
@@ -2987,8 +3262,9 @@
     }
 
     /* 一个指标的数据点：
-         keys   —— x 轴的桶键（所有分线的并集、排序后），多条线共用一根轴
-         lines  —— [{ key, name, color, points: [{key, label, value, count}] }]
+         keys   —— x 轴的桶键（所有分线的并集、排序后），多条线共用一根轴。
+                   配了「默认值」时**铺满整个窗口**（没记录到的桶也在轴上，值是默认值）
+         lines  —— [{ key, name, color, points: [{key, label, value, count, isDefault}] }]
          hits   —— 命中并抽到值的条数
          misses —— 命中关键词却没抽到数字的条数（卡片上要提示，见 _metricCardHtml） */
     _metricSeries(records, metric, window) {
@@ -3046,7 +3322,14 @@
         cell.max = Math.max(cell.max, got.value);
         cell.min = Math.min(cell.min, got.value);
       });
-      const keys = Array.from(allKeys).sort();
+      let keys = Array.from(allKeys).sort();
+      /* 配了「默认值」就把横轴铺满整个窗口 —— 没记录到的那天也得有一个点
+         （值 = 默认值），折线才不会在那天断开。有数据的桶当然一个都不少。 */
+      const hasDflt = metric.default !== null && Number.isFinite(metric.default);
+      if (hasDflt && window) {
+        const full = this._metricBucketKeysIn(window.from, window.to, scale);
+        if (full.length) keys = Array.from(new Set(full.concat(keys))).sort();
+      }
       /* 按分线词在配置里写的顺序排；没带上分线词的那一组（""）放最后，
          图例读起来就是「空腹 / 餐后 / 未标注」 */
       const lineKeys = Array.from(buckets.keys()).sort((a, b) => {
@@ -3063,10 +3346,20 @@
            不然图例里会出现「血糖 / 空腹 / 餐后」三条，第一条叫什么说不清 */
         name: lineKey || (splitKws.length ? "未标注" : metric.name),
         color: colors[idx],
-        points: Array.from(buckets.get(lineKey).keys())
-          .sort()
+        points: (hasDflt ? keys.slice() : Array.from(buckets.get(lineKey).keys()).sort())
           .map((bucketKey) => {
             const cell = buckets.get(lineKey).get(bucketKey);
+            /* 这个桶里一条都没记录到：配了默认值就补一个默认点
+               （count = 0 且打上 isDefault，气泡里会说明这是补出来的）。 */
+            if (!cell) {
+              return {
+                key: bucketKey,
+                label: this._metricBucketLabel(bucketKey, scale),
+                value: metric.default,
+                count: 0,
+                isDefault: true,
+              };
+            }
             /* 桶内留空 = 跟随「取值」（同一个词管两级：一条内容里怎么取、一个桶里怎么并） */
             let value;
             switch (metric.bucket || metric.pick) {
@@ -3121,7 +3414,12 @@
          1. 纵轴不从 0 起 —— 体重 65 上下的折线从 0 起就是一条直线，这里按数据范围取；
          2. 刻度取整数档（1 / 2 / 5 × 10^k）—— 四等分会算出 65.9 / 65.5 这种读数别扭的
             刻度，手账本那种图都是能一眼读出来的整数；
-         3. 左边留出一条刻度带 —— 折线不从 x=0 起笔，第一个点不会压在刻度字上。 */
+         3. 左边留出一条刻度带 —— 折线不从 x=0 起笔，第一个点不会压在刻度字上。
+       横向参考线有两套，可以同时开：
+         · 手填的「目标值」—— 一条虚线 + 「目标 N」标签（指标配置里的 target）；
+         · 「最大 / 平均 / 最小」三条 —— 打开 metric.ref 后按**全部数据**算出来画，
+           最大在顶、平均在中、最小在底，y 轴范围也会把这三条纳进来，
+           免得平均值线跑到图外面去。 */
     _metricChartSvg(series, metric, width) {
       const WIDTH = Math.min(1600, Math.max(320, Math.round(width || 580)));
       /* 高度跟着宽度走但夹在 190~320 之间：太窄了要够高才看得清折线，
@@ -3142,6 +3440,28 @@
         lo = Math.min(lo, metric.target);
         hi = Math.max(hi, metric.target);
       }
+      /* 三条参考线（最大 / 平均 / 最小）：算在**全部线、全部点**上 ——
+         不是每条线各来一套，那样「空腹 / 餐后」这种指标会画出六条虚线，看着就糊。
+         数值相同的（只有一天数据时最大 = 最小 = 平均）合并成一条，
+         免得三条叠在一起、标签互相压。 */
+      const dec = Number.isFinite(metric.decimals) ? metric.decimals : 1;
+      const refs = [];
+      if (metric.ref) {
+        const sum = values.reduce((a, b) => a + b, 0);
+        [
+          { v: Math.max.apply(null, values), label: "最大", below: false, strong: false },
+          { v: sum / values.length, label: "平均", below: false, strong: true },
+          { v: Math.min.apply(null, values), label: "最小", below: true, strong: false },
+        ].forEach((r) => {
+          const k = r.v.toFixed(Math.max(0, Math.min(4, dec)));
+          if (refs.some((x) => x.v.toFixed(Math.max(0, Math.min(4, dec))) === k)) return;
+          refs.push(r);
+        });
+        refs.forEach((r) => {
+          lo = Math.min(lo, r.v);
+          hi = Math.max(hi, r.v);
+        });
+      }
       let span = hi - lo;
       if (span <= 0) span = Math.abs(hi) > 1 ? Math.abs(hi) * 0.2 : 1;
       /* 刻度步长取 1 / 2 / 5 × 10^k，再把上下界对齐到步长的整数倍 */
@@ -3157,9 +3477,15 @@
       }
       const yOf = (v) => PAD_T + plotH - ((v - y0) / (y1 - y0)) * plotH;
       const n = series.keys.length;
+      /* 桶键 → 下标：**别用 series.keys.indexOf**。配了「默认值」之后横轴会铺满
+         整个窗口（「全部」+ 日尺度能到 4000 个桶），indexOf 是线性的、而它每个
+         点都要调好几次 —— 4000 个点就是几千万次字符串比较，图会卡住。
+         一张表查到底，画多少点都是 O(N)。 */
+      const keyIndex = new Map();
+      series.keys.forEach((k, i) => keyIndex.set(k, i));
       const xOf = (key) => {
-        const i = series.keys.indexOf(key);
-        return n > 1
+        const i = keyIndex.has(key) ? keyIndex.get(key) : -1;
+        return n > 1 && i >= 0
           ? PAD_L + ((WIDTH - PAD_L - PAD_R) * i) / (n - 1)
           : (WIDTH + PAD_L - PAD_R) / 2;
       };
@@ -3194,6 +3520,22 @@
           1
         )}" text-anchor="end" class="north-caltab-stats-axis-text">目标 ${metric.target}</text>`;
       }
+      /* 三条参考线：最大在最上面、平均在中间、最小在最下面。
+         标签默认贴在线上方，最小那条改贴下方（它已经在图底，上方还压着数据点）。
+         线一律比刻度线实一点、比数据线虚一点 —— 是「尺子」不是「数据」。 */
+      refs.forEach((r) => {
+        const y = yOf(r.v);
+        svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${WIDTH - PAD_R}" y2="${y.toFixed(
+          1
+        )}" stroke="var(--b3-theme-on-surface-light)" stroke-width="1" stroke-dasharray="${
+          r.strong ? "8 4" : "5 5"
+        }" opacity="${r.strong ? 0.8 : 0.5}"/>`;
+        svg += `<text x="${WIDTH - PAD_R}" y="${(y + (r.below ? 12 : -5)).toFixed(
+          1
+        )}" text-anchor="end" class="north-caltab-stats-axis-text">${r.label} ${r.v.toFixed(
+          dec
+        )}</text>`;
+      });
       /* 面积先画、折线后画 —— 反过来的话折线会被自己的半透明面积盖住 */
       series.lines.forEach((line) => {
         if (line.points.length < 2) return;
@@ -3213,7 +3555,7 @@
           const cy = yOf(p.value).toFixed(1);
           const tip = escapeHtml(
             `${line.name} · ${p.label} · ${this._metricFmt(p.value, metric)}${
-              p.count > 1 ? ` · ${p.count} 条` : ""
+              p.isDefault ? " · 默认值" : p.count > 1 ? ` · ${p.count} 条` : ""
             }`
           );
           svg += `<circle cx="${cx}" cy="${cy}" r="${
@@ -3368,7 +3710,7 @@
               lastPoint
                 ? `最近 <b>${Number(lastPoint.value).toFixed(metric.decimals)}</b>${
                     metric.unit ? " " + escapeHtml(metric.unit) : ""
-                  }`
+                  }${lastPoint.isDefault ? "（默认值）" : ""}`
                 : "暂无数据"
             }</span>
             ${
@@ -3565,7 +3907,7 @@
       const wrap = document.createElement("div");
       wrap.className = "tt-metrics";
       wrap.innerHTML = `
-        <div class="tt-metrics__intro">填一个内容里会出现的词，就围绕它生成一个指标。其余设置收在「更多」里，按需展开。</div>
+        <div class="tt-metrics__intro">填一个内容里会出现的词，就围绕它生成一个指标。其余设置收在「更多」里，按需展开 —— 里面另有「默认值」（没记录到的那天用它补点，折线不断）与「参考线」（画出最大 / 平均 / 最小三条横线）。</div>
         <div class="tt-metrics__groups"></div>
         <button class="tt-metrics__group-add" type="button"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconAdd"></use></svg> 添加大类</button>
         <div class="tt-metrics__hint">改动即时保存；关掉这个窗口后指标段位会刷新。</div>
@@ -3619,6 +3961,9 @@
               <input type="text" class="tt-metrics__item-split" placeholder="分线词：按它拆成多条线" />
               <input type="text" class="tt-metrics__item-exclude" placeholder="排除词：出现就跳过" />
             </div>
+            <div class="tt-metrics__item-row">
+              <input type="text" class="tt-metrics__item-default" placeholder="默认值：没记录到的那天用它补（留空 = 不补）" />
+            </div>
             <div class="tt-metrics__item-segs"></div>
           </div>
         `;
@@ -3632,6 +3977,7 @@
         const decInput = el.querySelector(".tt-metrics__item-dec");
         const splitInput = el.querySelector(".tt-metrics__item-split");
         const excludeInput = el.querySelector(".tt-metrics__item-exclude");
+        const dfltInput = el.querySelector(".tt-metrics__item-default");
         const removeBtn = el.querySelector(".tt-metrics__item-remove");
 
         /* 绑了类型时这个色块只是「显示」类型色：点了也不该能改 ——
@@ -3688,13 +4034,16 @@
         decInput.value = String(nm.decimals);
         splitInput.value = nm.split;
         excludeInput.value = nm.exclude;
+        dfltInput.value = nm.default === null ? "" : String(nm.default);
 
-        /* 设过高级项的（排除词 / 分线词 / 目标 / 小数位 / 尺度 / 桶内）默认展开，
-           否则用户打开管理窗口会以为自己的配置丢了 */
+        /* 设过高级项的（排除词 / 分线词 / 目标 / 默认值 / 参考线 / 小数位 / 尺度 / 桶内）
+           默认展开，否则用户打开管理窗口会以为自己的配置丢了 */
         const advanced =
           !!nm.exclude ||
           !!nm.split ||
           nm.target !== null ||
+          nm.default !== null ||
+          !!nm.ref ||
           nm.decimals !== 1 ||
           nm.scale !== "day" ||
           !!nm.bucket;
@@ -3718,6 +4067,13 @@
         bind(splitInput, "split");
         bind(excludeInput, "exclude");
         bind(targetInput, "target");
+        /* 默认值：留空 / 非数字 → null（= 不补点），与 normMetric 同一套判据 */
+        bind(dfltInput, "default", (inp) => {
+          const raw = String(inp.value == null ? "" : inp.value).trim();
+          if (raw === "") return null;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : null;
+        });
         bind(decInput, "decimals", (inp) => {
           const n = Math.round(Number(inp.value));
           return Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : 1;
@@ -3751,6 +4107,22 @@
             metric.scale = v;
             this._saveMetrics();
           })
+        );
+        /* 参考线：打开后在折线图上按全部数据画三条横向虚线
+           （最大在顶、平均在中、最小在底）。与手填的「目标值」线并存。 */
+        segs.appendChild(
+          segRow(
+            "参考线",
+            [
+              { value: "", label: "关闭" },
+              { value: "on", label: "最大 / 平均 / 最小" },
+            ],
+            nm.ref ? "on" : "",
+            (v) => {
+              metric.ref = v === "on";
+              this._saveMetrics();
+            }
+          )
         );
         return el;
       };
@@ -4224,7 +4596,7 @@
        （三档的含义见文件顶部 TYPE_STAT_OPTIONS 那段说明）。
        表里没这个名字、或这一项没标过 → normal，
        所以在类型管理里删掉某个类型 / 改名之后，老记录不会算出奇怪的结果。
-       时间轴、日历、表格、时长统计、习惯、番茄速记的间隔都走这一个判定，
+       时间轴、日历、表格、时长统计、习惯、间隔属性的判定都走这一个，
        口径只有这一处，不会出现「这个视图算进去了、那个没算」。 */
     _typeStatRole(type) {
       const name = String(type == null ? "" : type).trim();
@@ -4287,8 +4659,8 @@
               item.stat = cur === "normal" ? "off" : cur === "off" ? "anchor" : "normal";
               this._saveTypes();
               renderStatChips();
-              /* 番茄速记的间隔跟的就是这套口径：开着的话全部重算一遍 */
-              if (this._tomatoIdeaOn()) this._backfillTomatoAttrs();
+              /* 间隔口径变了：全部记录文档的间隔属性重算一遍 */
+              this._backfillIntervalAttrs();
             });
             statChipsEl.appendChild(btn);
           });
@@ -5236,6 +5608,36 @@
      * 周与三日只有「列数 / 起点」不同，排版与尺寸全是同一份实现。
      * ============================================================ */
 
+    /* 把任意数值夹到最近的一档上（_tlBaseH / _setTlBaseH 共用这一处判定） */
+    _tlBaseHFrom(px) {
+      const v = Number(px);
+      if (!isFinite(v) || v <= 0) return TL_HOUR_DEFAULT;
+      let best = TL_HOUR_STEPS[0];
+      for (const s of TL_HOUR_STEPS) {
+        if (Math.abs(s - v) < Math.abs(best - v)) best = s;
+      }
+      return best;
+    }
+
+    /* 当前「每小时基础高度」（px）。时间轴的缩放基准就这一个来源：
+       刻度、小时线、事件块、滚动定位全都读它，缩放后不会各走各的。
+       取值一律走档位清单 —— Ctrl+滚轮 与设置里那个下拉共用同一份清单，
+       所以滑轮滚过之后，设置里显示的一定是同一个数。
+       数据坏了 / 首次运行 → 回落到默认 40px。 */
+    _tlBaseH() {
+      return this._tlBaseHFrom(this.data && this.data.tlHourH);
+    }
+
+    /* 设一个档位内的新基准高度，落盘并返回最终生效值。 */
+    _setTlBaseH(px) {
+      const next = this._tlBaseHFrom(px);
+      if (this.data.tlHourH !== next) {
+        this.data.tlHourH = next;
+        this._persist("保存时间轴小时高");
+      }
+      return next;
+    }
+
     /* 从记录的 time 文本里取时间区间，单位是「当天第几分钟」。
        我们的记录基本都是时间点（08:30 类型：内容），所以多半只有 start；
        万一有人把 time 手改成 08:30 - 09:30 这种区间，也一并接住。
@@ -6039,12 +6441,14 @@
     /* 给「同一天」的记录按当前时间计算模式算出真实起止（分钟）。
        入参 sorted 必须是已按时间升序的 [{ rec, range }]，range 来自 _parseTimeRange。
        返回等长的 [{ start, end, hasRange, dur }]：
-         hasRange false —— 当天首条（结束模式）/ 末条（开始模式）没有参照，
-                           起止只用来给块一个最小高度，文案不写成区间；
+         hasRange false —— 没有参照的那条：当天首条（结束模式）/ 当天末条（开始模式）/
+                           类型是「起点」的那条。start === end，块高交给渲染层的
+                           保底去兜；文案不写成区间，只写节点时间；
          dur            —— 真正计入时长口径的分钟数，hasRange false 时为 0：
                            首末条本来就不知道它持续了多久，宁可不计，
                            也不编一个 30 分钟进去 —— 编出来的数字会顺着
                            链条污染下一条的起点，跟 Dock 时间线的口径就岔开了。
+                           （同理，start/end 也不再给假跨度，见下面 solo() 的注释。）
        参照的那条一律取它的**节点时间**（range.start），不取它算出来的起止 ——
        记录自己写明区间（08:30 - 09:30）时，无论选哪个模式都直接采用，不再按模式推。
 
@@ -6071,10 +6475,18 @@
       roles.forEach((r, i) => {
         if (r !== "off") chain.push(i);
       });
-      /* 没有参照的那条：只写自己的节点时间，给块一个最小高度，不计时长 */
+      /* 没有参照的那条（当天首条 / 起点 / 只记录）：只写自己的节点时间，
+         **不给任何假跨度** —— 块的最小高度由渲染层的 WEEK_MIN_BLOCK_H 保底。
+         早先这里是 `end = anchorMin + WEEK_DEFAULT_MIN(30分)`，本意是「给块一个
+         最小高度」；但块高是「时长 × 每小时像素」算出来的，缩放会把它一起放大：
+         小时高调到 240px 时，这条假跨度就是一块 120px 高的大色块，而且它还会
+         把下一条挤开（顺序摆 + 最小间距），被挤开的偏移再顺着链条传下去 ——
+         实测 11:03 那条的块底因此比它的结束时刻低了 14 分钟，
+         用户看到的就是「明明 11:03，怎么占掉 11–12 一大块」。
+         改成长度 0 之后：块高 = 保底 22px，不再随时长缩放，也不再挤别人。 */
       const solo = (anchorMin) => ({
         start: anchorMin,
-        end: anchorMin + WEEK_DEFAULT_MIN,
+        end: anchorMin,
         hasRange: false,
         dur: 0,
       });
@@ -6137,71 +6549,189 @@
       return list.map((x, i) => Object.assign({}, x, ranges[i]));
     }
 
-    /* 估各小时需要多高。摆块（_buildCalendarTimelineEvents）发生在「弹性小时」
-       的几何里：top 用的 yOf 会随小时高变大，所以估高不能按 40px 均匀几何
-       一遍定死 —— 那样估出来的需求偏小，摆出来的块越排越往下漂，漂出去的
-       部分落在没撑过的小时里，块与刻度线就对不上好几个钟头。
-       这里改成迭代收敛：按当前小时高真实摆一遍（与摆块同一套链式逻辑、
-       同一份 yOf）→ 量出每块的块底落在哪个小时、超出多少 → 重算小时高 →
-       再摆，循环到小时高不再变化（块高按均匀尺度取，链式漂移有界，最多几
-       轮就稳住；封顶 8 轮兜底）。
-       每轮两路一起算，取大者：
-       ① 真实摆块：块底落到哪个小时，就把那个小时撑到装得下；
-       ② 同一小时里起始 ≥ 2 条的堆：按「最小块高 + 间距」从整点附近往下摞
-          也要装得下，否则整堆会顺流冲进后面几小时，离自己的时间越来越远。
-          （块高与起点都不随小时高变，这一路一轮算好即可。） */
+    /* 估各小时需要多高，让「起始落在本小时的记录」都留在本小时的刻度带里。
+       为什么必须弹性：记录工具常常几分钟一条，块又保底 22px 高，固定 40px/小时
+       按时间比例硬摆必然叠字；而撑高某个小时又会让它下面的块整体下移 ——
+       所以撑多高必须与摆块用**同一份几何**算出来，否则块与刻度线越差越远。
+
+       按小时**顺序**解，每小时内部迭代到自洽（不是全局迭代几轮）：小时 h 的
+       需求只取决于 cum[h]（前面已定稿）与本小时的高度，定完 h 再算 h+1 就是
+       精确解，不靠轮数去逼近。
+
+       每小时的需求归到「块**起始**所在的小时」上 —— 这是本函数的关键。
+       旧实现把需求记在「块底落在的小时」上：块一旦被上面的密集记录推得越过
+       小时线，撑高的就变成了下一小时，越界的块反而永远拉不回来。
+       用户反馈的「8:40 的记录跑到 9-10 区间」就是这条。
+       另外分两种情况：
+         · 块在时间上本来就跨出本小时（如 09:41 → 11:03）→ 只要求它的**起始**
+           落在带内（这种块按定义就跨带，不能要求整块塞进一小时）；
+         · 块按时间算属于本小时 → 要求**整块**落在带内。
+       少了这条区分，长块会把它的起始小时撑到几十倍高。
+
+       撑高有上限（TL_HOUR_MAX_RATIO）：记录全挤在一小时最后一分钟时，
+       「整堆塞进本小时」的方程会发散（分母趋零），超过上限就停手、让那一小时
+       溢出 —— 用「能看的视图」换极端情况下的严格贴合。把小时高调大时上限按
+       倍率同步放大，所以真遇到这种数据，放大就能压住。 */
     _calTimelineLayout(parsedByDate, days) {
+      const base = this._tlBaseH();
       const dayLists = days
         .map((d) => parsedByDate[this._calKey(d)] || [])
         .filter((parsed) => parsed.length);
 
-      const stackNeed = new Array(24).fill(0);
-      dayLists.forEach((parsed) => {
-        const byHour = new Map();
-        parsed.forEach((x) => {
-          const h = Math.max(0, Math.min(23, Math.floor(x.start / 60)));
-          if (!byHour.has(h)) byHour.set(h, []);
-          byHour.get(h).push(x.start);
-        });
-        byHour.forEach((starts, h) => {
-          if (starts.length < 2) return;
-          const stackH =
-            starts.length * WEEK_MIN_BLOCK_H +
-            (starts.length - 1) * WEEK_EVENT_GAP;
-          const frac = (starts[0] - h * 60) / 60;
-          stackNeed[h] = Math.max(stackNeed[h], stackH + frac * WEEK_HOUR_H);
-        });
-      });
+      /* 块的展示高度：**跟着本小时的最终高度走**（时长 × 该小时 px/小时），
+         与摆块处（_buildCalendarTimelineEvents）同一个口径。
+         ------------------------------------------------------------------
+         早先这里是「时长 × 基准」，理由是「撑高只负责腾出行距、不改变块的
+         高矮」。但位置是按撑高后的尺度摊开的 —— 位置用 hourH、高度用 base，
+         两把尺子不一样，撑高越多差得越多：
+           · 实测 2026-10-08 的 11:41（时长 38 分）：11 点被撑到 79px/小时，
+             这 38 分在画布上摊成 50px，块本身却只有 22px（保底）→
+             块底到下一块块顶之间露出 26px 空隙；
+           · 用户看到的就是「明明是连续记录，中间为什么空一块」。
+         改成同一把尺子之后：块的**块顶 = 起始时刻、块底 = 结束时刻**，
+         相邻记录自然首尾相接（只留 WEEK_EVENT_GAP 那道 2px 细缝），
+         视觉宽度与时间宽度一致 —— 这才是时间轴该有的读法。
+         注意块高必须用**本小时**的 hourH：跨小时的块按定义会横穿两个不同
+         尺度的带（弹性小时本来就不保证跨带等比），这里取起始小时那把尺，
+         与渲染层「按 yOf 几何取高」在起始带内是同一个结果。
+         ⚠️ 高度随 hourH 等比放大**不会**让方程发散：链尾块顶的斜率只有
+         p/60（保底高度不随尺度变、时长项在链条里前后抵消，推导见下面
+         needH 那段），仍然收敛。 */
+      /* 块起始落在哪一小时 */
+      const hourOf = (min) => Math.max(0, Math.min(23, Math.floor(min / 60)));
 
-      /* 块的展示高度：均匀尺度（时长 × 基准 40px/小时），与摆块处保持同一
-         口径 —— 撑高只负责腾出行距，不改变块自己的高矮（见摆块处的说明） */
-      const blockH = (x) =>
-        Math.max(WEEK_MIN_BLOCK_H, ((x.end - x.start) / 60) * WEEK_HOUR_H);
+      const hourH = new Array(24).fill(base);
+      /* 各天「上一小时最后一块」的**惰性**记录 { top, end }，逐小时往下接力
+         （周 / 三日视图多天共用同一套小时高，所以按天各记一份）。
+         ------------------------------------------------------------------
+         为什么不直接存算好的块底（像素）：跨小时那条的块底 = yOf(它的结束时刻)，
+         而那个结束时刻往往就落在**正在解的这一小时**里 —— 存成数字就等于把
+         「上一遍的旧高度」固化下来，每个小时交界处都会少算一个 WEEK_EVENT_GAP
+         的推进量，块顶比带底多出 1～2px（用户看到的是「差一点点就出界」）。
+         存 { top, end } 之后，接力时用**当前这轮的 hourH** 现算，与渲染层
+         完全同源。 */
+      const dayPrev = dayLists.map(() => null);
 
-      let hourH = new Array(24).fill(WEEK_HOUR_H);
-      for (let iter = 0; iter < 8; iter++) {
-        const cum = [0];
-        for (let h = 0; h < 24; h++) cum.push(cum[h] + hourH[h]);
-        const yOf = (min) => {
-          const h = Math.max(0, Math.min(23, Math.floor(min / 60)));
-          return cum[h] + ((min - h * 60) / 60) * hourH[h];
+      for (let h = 0; h < 24; h++) {
+        let cumH = 0;
+        for (let k = 0; k < h; k++) cumH += hourH[k];
+        /* 块底：与渲染层同一式 —— 保底高度优先，否则落到真正的结束时刻
+           （= max(top + MIN, yOf(end))，正是 _buildCalendarTimelineEvents 里
+           top + height 的展开）。链上必须用**同一个式子**接力，否则块的可用
+           空间会算错：块高改用本小时的尺子之后，若这里还按「时长 × 基准」
+           估底，跨小时那条的块底会被高估，把下一小时白白撑大
+           （实测 9 点从 24px 虚涨到 125px，全天跟着变高）。
+
+           式里的 yOf 是下面这把**临时尺子 yOfP**：算第 h 小时时，前面几小时
+           已定稿、第 h 小时正在解、后面的还停在基准值上 —— 就按这份「半成品」
+           拼接（每轮迭代开头重建一次累积和，所以调用是 O(1)）。
+           首尾相接的记录（插件写出来的全是这种）只用到本小时的几何，因此
+           与最终几何逐像素一致；只有手写重叠区间那种自相矛盾的数据才会碰到
+           后面小时的临时值，那类数据由下面的 frozen 把撑高需求冻住。 */
+        let cumP = new Array(25).fill(0);
+        const yOfP = (min) => {
+          const hh = Math.max(0, Math.min(23, Math.floor(min / 60)));
+          return cumP[hh] + ((min - hh * 60) / 60) * hourH[hh];
         };
-        const need = stackNeed.slice();
-        dayLists.forEach((parsed) => {
-          let prevBottom = -WEEK_EVENT_GAP;
-          parsed.forEach((x) => {
-            const top = Math.max(yOf(x.start), prevBottom + WEEK_EVENT_GAP);
-            const bottom = top + blockH(x);
-            prevBottom = bottom;
-            /* 块底落在哪个小时（按当前几何的 cum 找），就把那个小时撑到装得下 */
-            let hb = 0;
-            while (hb < 23 && cum[hb + 1] <= bottom) hb++;
-            need[hb] = Math.max(need[hb], bottom - cum[hb]);
+        const blockBottom = (x, top) =>
+          Math.max(top + WEEK_MIN_BLOCK_H, yOfP(x.end));
+        /* 惰性接力的求值：上一小时最后一块的块底。还没有上一块时给 −GAP ——
+           配合调用处的「+ WEEK_EVENT_GAP」，第一块的下限正好是 0（不回退）。 */
+        const prevBottomOf = (cell) =>
+          cell
+            ? Math.max(cell.top + WEEK_MIN_BLOCK_H, yOfP(cell.end))
+            : -WEEK_EVENT_GAP;
+        /* 小时内迭代到自洽：撑高会把本小时的块再往下推，所以「需要多高」是
+           自身高度 h 的函数，写成 h ← max(base, ⌈need(h)⌉)。need 单调不减、
+           斜率 = 本小时最靠后的那个块起始偏移（<1，因为起始一定在本小时内），
+           所以这是个收敛的不动点，单调上爬、不会来回摆 —— 但**收敛速度取决于
+           斜率**：块全挤在本小时最后一分钟时斜率趋近 1，要几十轮才逼近。
+           旧实现写死 10 轮，遇到「一小时里十几个每分钟一条」就停在中途
+           （实测 base=120 时停在 1415px，而真解是 1457px），最后一条溢出带外
+           18px —— 用户看到的「记录不在所属区间」就是这么来的。
+           这里给足轮数并在值不再变化时立刻 break：绝大多数小时的块起始在
+           整点附近（斜率小），一轮就定死，只有真正密集的小时才多跑几轮。
+           上限仍然保留：斜率再大也越不过 TL_HOUR_MAX_RATIO 倍基准，
+           真到那一步就停手、让那一小时溢出，靠放大（Ctrl+滚轮）去压。
+
+           ★ 判据只取**块顶**：needH = max(top − cumH + 1)。
+           ------------------------------------------------------------------
+           旧实现多问一句「不跨小时的块，整块也要在带内」—— 那是「块高不随
+           尺度变」时代的规矩。块高改成跟着本小时的尺子走之后，这条要求**在
+           数学上无解**：一小时被记录填满时（如 09:00–10:00 每 10 分钟一条），
+           每条块高正好等于自己的时长，六条加起来正好占满一小时，可块与块之间
+           还要留 WEEK_EVENT_GAP —— 内容总高必然比 hourH 多出几条缝隙，
+           于是 needH 恒等于 hourH + 缝隙，迭代每轮涨一点、永远追不上，
+           直接顶到 TL_HOUR_MAX_RATIO，普普通通的一天会被撑成巨型方块。
+           而块底本来就不必受带约束：块底落在**它真正的结束时刻**上，
+           跨小时的记录（08:46 → 09:41）按定义就该横穿两条刻度带 ——
+           那正是「时间范围显示精准」想要的效果。
+           用户读时间轴看的是**块顶**（记录的时刻），所以「块顶必须在自己的
+           带内」才是要守的不变量；块底交给时刻表的几何去决定。
+           斜率仍然 < 1：链条里 top = max(yOf(start), prevBottom + GAP)，
+           而 prevBottom 只有两项 —— 保底项（斜率 0）与「结束时刻」（斜率
+           p_end/60，p_end < 60，因为 end 落在本小时内），取 max 后上界是
+           max(p_first, p_end)/60 < 1。跨小时的「结束时刻」也按**当前这一轮的**
+           几何现算（见上方 dayPrev 的惰性记录），不会带回旧值、不贡献额外斜率。
+           若某条记录被下推到「yOf(end) − top < MIN」，块底会越过结束时刻，
+           但越过的量恒 ≤ MIN，读者看不出；这是保底高度换可读性的既定取舍。 */
+        for (let round = 0; round < TL_SOLVE_ROUNDS; round++) {
+          for (let k = 0; k < 24; k++) cumP[k + 1] = cumP[k] + hourH[k];
+          let needH = base;
+          dayLists.forEach((parsed, di) => {
+            let prevBottom = prevBottomOf(dayPrev[di]);
+            /* 本小时内的「计数器冻结」标志，见下面 frozen 的说明 */
+            let frozen = false;
+            for (const x of parsed) {
+              const hx = hourOf(x.start);
+              if (hx < h) continue;
+              if (hx > h) break; /* 已按 start 升序，后面的都不属于本小时 */
+              const top = Math.max(
+                cumH + ((x.start - h * 60) / 60) * hourH[h],
+                prevBottom + WEEK_EVENT_GAP
+              );
+              const minBottom = top + WEEK_MIN_BLOCK_H;
+              prevBottom = blockBottom(x, top);
+              if (!frozen) needH = Math.max(needH, top - cumH + 1);
+              /* ★ 冻结本小时的撑高需求。
+                 触发条件：块底由**「结束时刻」**决定（不是保底），而且这个结束
+                 时刻已经到/越过本小时的带底。这时它是「钉死在带底之下」的：
+                 yOf(end) 里含一整个 hourH[h]，把它传给下一条 → 需求变成
+                 hourH + 常数、斜率恰好 1，撑高永远追不上，一路爬到闸门上限
+                 （实测「09:00 - 10:00」手写区间之后又记一条，9 点被撑到 424px）。
+                 这种数据的本质是**重叠**：两条记录的区间压在同一个小时里，
+                 一条必然要被堆到带外，撑高救不了 —— 那就不再拿它去撑。
+                 首尾相接的正常记录触发不到：跨带的块后面那条的 start 已经在
+                 下一个小时里，本小时已经没有后续块可冻了。 */
+              if (x.end >= (h + 1) * 60 && prevBottom > minBottom + 0.5) frozen = true;
+            }
           });
+          const next = Math.min(
+            base * TL_HOUR_MAX_RATIO,
+            Math.max(base, Math.ceil(needH))
+          );
+          if (next === hourH[h]) break;
+          hourH[h] = next;
+        }
+        /* 本小时定稿：接力给下一小时。
+           **只记「最后一块是谁」（top / end），不记算好的像素** —— 下一小时在
+           迭代时用当时的 hourH 现算它的块底，与渲染层同源（见 dayPrev 的说明） */
+        dayLists.forEach((parsed, di) => {
+          let cell = dayPrev[di];
+          let prevBottom = prevBottomOf(cell);
+          for (const x of parsed) {
+            const hx = hourOf(x.start);
+            if (hx < h) continue;
+            if (hx > h) break;
+            const top = Math.max(
+              cumH + ((x.start - h * 60) / 60) * hourH[h],
+              prevBottom + WEEK_EVENT_GAP
+            );
+            prevBottom = blockBottom(x, top);
+            cell = { top, end: x.end };
+          }
+          dayPrev[di] = cell;
         });
-        const next = need.map((n) => Math.max(WEEK_HOUR_H, Math.ceil(n)));
-        if (next.every((v, h) => v === hourH[h])) break;
-        hourH = next;
       }
 
       const cum = [0];
@@ -6229,15 +6759,27 @@
       let prevBottom = -WEEK_EVENT_GAP;
       return parsed.map((x) => {
         const top = Math.max(yOf(x.start), prevBottom + WEEK_EVENT_GAP);
-        /* 块高按**均匀尺度**取（时长 × 基准 40px/小时），不用 yOf 差值 ——
-           yOf 在弹性小时里被撑大，拿它算高度会让落在撑高小时里的块跟着
-           膨胀，膨胀又把后面的块顶得更低、顶进没撑过的小时，越摆越漂
-           （用户反馈的「时间段位置对不上」就是这条正反馈）。
-           撑高只负责把密集时段的行距腾出来，块本身多高只看时长。 */
-        const height = Math.max(
-          WEEK_MIN_BLOCK_H,
-          ((x.end - x.start) / 60) * WEEK_HOUR_H
-        );
+        /* 块高 = **它在时间轴上真正占的那一段**：块顶落在起始时刻、块底落在
+           结束时刻，高度就是两者在这份几何里的距离。位置与高度用同一把尺子
+           （yOf 差值），视觉宽度 = 时间宽度。
+           ------------------------------------------------------------------
+           早先这里按「时长 × 基准 px/小时」取高（理由：撑高只负责腾行距），
+           可位置是按撑高后的 hourH 摊开的 —— 两把尺子不一致，撑高越多差越多：
+           实测 2026-10-08 的 11:41（时长 38 分）在 base 24 下，位置摊成 50px、
+           块高只有 22px（保底），与下一条之间露出 **26px 空隙**；用户看到的
+           就是「明明是连续记录，中间为什么空一块」。同一把尺子之后，相邻记录
+           自然首尾相接（只留 WEEK_EVENT_GAP 那道 2px 细缝）。
+           「不越过自己的结束时刻」这条约束因此变成**自动成立**的：
+           height = yOf(end) − top ≤ yOf(end) − yOf(start)，块底顶多落在
+           真正的结束时刻上（被下推时更早就收住）。
+           下限 WEEK_MIN_BLOCK_H：再挤也得看得见、放得下一行字。极短的记录
+           （或已被上面推下来、剩余空间不足 MIN 的）会越过结束时刻，
+           但**越过量恒 ≤ MIN**，换来的是「一行字看得见」。
+           与 _calTimelineLayout 的关系：那边的 blockBottom(x, top) 就是这一式的
+           展开 max(top + MIN, 结束时刻)，两处必须保持一致 —— 布局按它估算
+           撑高、这里按它出图，口径一变就会出现「布局以为的块高」与「实际块高」
+           不符，块会被顶出所属时间带。 */
+        const height = Math.max(WEEK_MIN_BLOCK_H, yOf(x.end) - top);
         prevBottom = top + height;
 
         /* 块够高就上下两行：标题一行、完整区间一行。
@@ -6282,6 +6824,49 @@
           tip
         )}">${compact ? timeSpan + titleSpan : titleSpan + timeSpan}</div>`;
       });
+    }
+
+    /* 时间轴正文的像素 y → 当天第几分钟（_calTabWvLayout.yOf 的逆函数）。
+       yOf 是分段线性的：先按 cum 找到落在哪一小时，再在那一小时内线性内插。
+       只给「Ctrl+滚轮 以光标为中心」用，算错也只是滚动位置偏一点。 */
+    _calTabWvMinAt(y) {
+      const L = this._calTabWvLayout;
+      if (!L || !L.cum || !L.hourH) return 0;
+      let h = 0;
+      while (h < 23 && L.cum[h + 1] <= y) h++;
+      const hh = L.hourH[h] > 0 ? L.hourH[h] : 1;
+      return h * 60 + ((y - L.cum[h]) / hh) * 60;
+    }
+
+    /* 时间轴视图：Ctrl（macOS 也可 ⌘）+ 滚轮 缩放「每小时基础高度」。
+       不按修饰键直接返回 —— 一个字节都不碰，普通滚动照旧。
+       Ctrl+滚轮 在思源 / 浏览器里默认是「整个界面缩放」，所以必须 preventDefault，
+       且用捕获阶段 + stopPropagation 抢在内核的监听之前把它吃掉，
+       否则界面会跟着一起被放大。 */
+    _onCalTabWheel(e, container) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const body = container && container.querySelector("#northCaltabWeekBody");
+      if (!body) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const cur = this._tlBaseH();
+      const idx = TL_HOUR_STEPS.indexOf(cur);
+      const nextIdx = Math.max(
+        0,
+        Math.min(TL_HOUR_STEPS.length - 1, (idx < 0 ? 0 : idx) + (e.deltaY < 0 ? 1 : -1))
+      );
+      const next = TL_HOUR_STEPS[nextIdx];
+      if (next === cur) return; /* 已经顶到档位两端 */
+      /* 记下光标正下方那一分钟、以及它在**可视区**里的 y：重绘后把它按回原处，
+         缩放才是「以光标为中心」，而不是整体跳走。用一次就清。 */
+      const rect = body.getBoundingClientRect();
+      const offset = e.clientY - rect.top;
+      this._calTabWvScrollAnchor = {
+        min: this._calTabWvMinAt(body.scrollTop + offset),
+        offset,
+      };
+      this._setTlBaseH(next);
+      this._refreshCalendarTabs();
     }
 
     /* ============================================================
@@ -6651,7 +7236,32 @@
         end = t;
       }
 
-      return { unit, dir, period, goalUnit, goal, alias, group, lv1, start, end };
+      /* 内容口径三件套：命中词 / 排除词 / 数字次数。
+         都给了安全兜底 —— 老配置里压根没有这几个键，读出来就是「不筛、记 1 次」，
+         行为与加这三条之前完全一致（零迁移）。 */
+      const match = String(raw.match == null ? "" : raw.match).trim();
+      const exclude = String(raw.exclude == null ? "" : raw.exclude).trim();
+      const num = raw.num === true || raw.num === "true";
+      const pick = HABIT_NUM_PICKS.some((o) => o.value === raw.pick)
+        ? raw.pick
+        : "sum";
+
+      return {
+        unit,
+        dir,
+        period,
+        goalUnit,
+        goal,
+        alias,
+        group,
+        lv1,
+        start,
+        end,
+        match,
+        exclude,
+        num,
+        pick,
+      };
     }
 
     /* 写回某个习惯的目标模型（_persist 存的是整份 settings，新键自动落盘）。
@@ -6684,6 +7294,10 @@
         lv1: cfg.lv1 === "mid" || cfg.lv1 === "deep" ? cfg.lv1 : "",
         start,
         end,
+        match: String(cfg.match == null ? "" : cfg.match).trim(),
+        exclude: String(cfg.exclude == null ? "" : cfg.exclude).trim(),
+        num: cfg.num === true || cfg.num === "true",
+        pick: HABIT_NUM_PICKS.some((o) => o.value === cfg.pick) ? cfg.pick : "sum",
       };
       this.data.habitConfig = all;
       this._persist("保存习惯目标");
@@ -6960,18 +7574,59 @@
       return map;
     }
 
+    /* 一段内容里挑出「该记几个」的那批数字。
+       与指标同一套取词规则，但多切一刀「句读」：配了命中词就只看**第一个命中词
+       所在的那一小句** —— 「跑步 5 公里，拉伸 3 分钟」只读跑步那半句，
+       不然后面那件事的数字会被一起卷进来（写手账时一行里记两件事太常见了）。
+       那一小句里一个数字都没有，才退回整条内容（这样没配命中词时也能整条读）。 */
+    _habitNumbersIn(text, kws) {
+      const s = String(text == null ? "" : text);
+      if (!s) return [];
+      if (kws && kws.length) {
+        let at = -1;
+        kws.forEach((k) => {
+          const i = s.indexOf(k);
+          if (i >= 0 && (at < 0 || i < at)) at = i;
+        });
+        if (at >= 0) {
+          const rest = s.slice(at, at + 40);
+          /* 第一个句读（中英标点都算）就是「这一件事情」的边界 */
+          const cut = rest.search(/[，。；！？,;!?、\n\r]/);
+          const slice = cut >= 0 ? rest.slice(0, cut) : rest;
+          const got = this._metricNumbers(slice);
+          if (got.length) return got;
+        }
+      }
+      return this._metricNumbers(s);
+    }
+
+    /* 一条记录给「数字次数」口径贡献几次：内容里的数字按 pick 合并。
+       一个数字都抽不到 → 0 次（它确实没说自己做了几个）。
+       上限与目标值同档（99999），免得一条手滑写成「第 20261008 天」把统计撑爆。 */
+    _habitRecordCount(text, kws, cfg) {
+      const nums = this._habitNumbersIn(text, kws);
+      if (!nums.length) return 0;
+      const v = this._metricPick(nums, cfg.pick);
+      if (!Number.isFinite(v) || v <= 0) return 0;
+      return Math.min(99999, Math.round(v * 100) / 100);
+    }
+
     /* 某类型一年里每天的表现：{ days: {日期键: {cnt, min}}, totalCnt, totalMin }
        时长口径就是上面那份缓存（= _calDayRows，跟着「时间计算模式」走：
        显式区间优先，结束模式算「上一条 → 本条」，开始模式算「本条 → 下一条」），
        再按类型挑出属于这个习惯的行。
        时间范围也在这里一处拦：范围外的记录直接不算 —— 热力图、连续、总计、
-       周 / 月卡全都吃这份数据，改这一处就够，不会出现两套口径。 */
+       周 / 月卡全都吃这份数据，改这一处就够，不会出现两套口径。
+       **内容口径（命中词 / 排除词 / 数字次数）同样只在这一处拦**，理由一致。 */
     _habitYearData(type, year) {
       const cfg = this._habitConfig(type);
       const map = this._habitRowsByDate(year);
       const days = {};
       let totalCnt = 0;
       let totalMin = 0;
+      /* 拆词只做一次：一年几百条记录，逐条去 split 一遍是白花的 */
+      const kws = metricKw(cfg.match);
+      const bad = metricKw(cfg.exclude);
       Object.keys(map).forEach((key) => {
         let cnt = 0;
         let min = 0;
@@ -6979,7 +7634,13 @@
           const t = row.record && row.record.type ? String(row.record.type).trim() : "";
           if (t !== type) return;
           if (this._habitOffState(cfg, key)) return;
-          cnt += 1;
+          /* 内容口径：命中词（留空 = 全都要）、排除词（出现就跳过，优先于命中词） */
+          const text = String((row.record && row.record.content) || "");
+          if (kws.length && !kws.some((k) => text.includes(k))) return;
+          if (bad.length && bad.some((k) => text.includes(k))) return;
+          /* 开了「数字次数」就按内容里的数字记，否则这条记 1 次。
+             时长不受影响 —— 分钟口径照旧累加。 */
+          cnt += cfg.num ? this._habitRecordCount(text, kws, cfg) : 1;
           min += row.dur || 0;
         });
         if (cnt) {
@@ -9231,13 +9892,35 @@
       /* 时间轴视图：进来先滚到早上 7 点 —— 活动基本都在白天，从 00:00 起
          要往下滚很久才看得到东西。表头在滚动容器之外，不会跟着滚走。
          7 点的像素位置要过一遍弹性小时布局：前面有小时被撑高时，
-         7 点不在 7*40px 处。 */
+         7 点不在 7*40px 处。
+         若这次重绘是 Ctrl+滚轮 触发的（_calTabWvScrollAnchor 有值），
+         就把缩放前光标下那一分钟按回原来的屏幕位置，缩放以光标为中心。 */
       if (isTimeline) {
         const wv = container.querySelector("#northCaltabWeekBody");
+        const root = container.querySelector(".north-caltab-weekview");
+        const anchor = this._calTabWvScrollAnchor;
+        this._calTabWvScrollAnchor = null;
         if (wv) {
-          wv.scrollTop = this._calTabWvLayout
-            ? this._calTabWvLayout.yOf(WEEK_INITIAL_HOUR * 60)
-            : WEEK_INITIAL_HOUR * WEEK_HOUR_H;
+          if (anchor) {
+            wv.scrollTop =
+              (this._calTabWvLayout
+                ? this._calTabWvLayout.yOf(anchor.min)
+                : WEEK_INITIAL_HOUR * this._tlBaseH()) - anchor.offset;
+          } else {
+            wv.scrollTop = this._calTabWvLayout
+              ? this._calTabWvLayout.yOf(WEEK_INITIAL_HOUR * 60)
+              : WEEK_INITIAL_HOUR * this._tlBaseH();
+          }
+        }
+        /* Ctrl+滚轮 缩放每小时高度。整棵树每次重绘都被 innerHTML 换掉，
+           所以监听直接绑在新节点上 —— 天然不会重复绑定、也不会留悬挂监听。
+           捕获阶段 + passive:false 的原因见 _onCalTabWheel。 */
+        if (root) {
+          root.addEventListener(
+            "wheel",
+            (e) => this._onCalTabWheel(e, container),
+            { passive: false, capture: true }
+          );
         }
         return;
       }
@@ -10266,8 +10949,8 @@
             [this._attr("updated")]: now,
           },
         });
-        /* 修改弹窗只改了这一条，但它前后邻居的番茄间隔都可能跟着变 */
-        this._scheduleTomatoSync(raw);
+        /* 修改弹窗只改了这一条，但它前后邻居的间隔都可能跟着变 */
+        this._scheduleIntervalSync(raw);
         this._closeCalEdit(container);
         showMessage(`${NAME}：已修改`);
         /* 文本和属性都变了：缓存作废，再重绘日历与 Dock */
@@ -10800,8 +11483,8 @@
             await this._serial(target.docId, () =>
               this._tagBlock(blockId, info, target.date)
             );
-            /* 新记录落库后同步番茄速记属性（自己 + 邻居的间隔都可能变） */
-            this._scheduleTomatoSync(target.docId);
+            /* 新记录落库后同步间隔属性（自己 + 邻居的间隔都可能变） */
+            this._scheduleIntervalSync(target.docId);
           }
           closeAll();
           showMessage(`${NAME}：已记录`);
@@ -11397,15 +12080,21 @@
       return next;
     }
 
-    /* ===================== 番茄速记属性同步 ===================== */
+    /* ===================== 间隔属性同步 ===================== */
 
-    /* 「番茄速记属性」开关是否打开（默认关） */
-    _tomatoIdeaOn() {
-      return !!(this.data && this.data.tomatoIdeaAttrs);
+    /* 「间隔属性」开关是否打开（默认开，默认值在 onload 里补） */
+    _intervalAttrOn() {
+      return !!(this.data && this.data.intervalAttrs);
+    }
+
+    /* 「间隔显示」开关是否打开（默认开，默认值在 onload 里补）。
+       只决定要不要往 head 里注入那段角标 CSS，与属性写入无关。 */
+    _intervalBadgeOn() {
+      return !(this.data && this.data.intervalBadge === false);
     }
 
     /* 块 ID / 文档 ID → 所在文档（根块）ID。文档 ID 查自己，两种都兜住。 */
-    async _tomatoRootIdOf(id) {
+    async _rootIdOf(id) {
       try {
         const resp = await this._request("/api/query/sql", {
           stmt: `SELECT root_id FROM blocks WHERE id = '${id}'`,
@@ -11420,13 +12109,16 @@
       }
     }
 
-    /* 同步一个文档里全部记录的番茄速记属性。传文档 ID。
+    /* 同步一个文档里全部记录的「间隔」属性。传文档 ID。
        记录按**内容**解析（与打标同一套 parseLine，不依赖属性索引 ——
        刚打完标的新块属性可能还没建好索引，内容是立即可查的）。
        算出每条的期望值后与现有属性比对，只写有变化的那几条 ——
-       稳定状态下同步是零写入，防抖反复触发也不产生写放大。 */
-    async _syncTomatoAttrs(rootId) {
-      if (!this._tomatoIdeaOn() || !this._validId(rootId)) return;
+       稳定状态下同步是零写入，防抖反复触发也不产生写放大。
+       值是表格 / 时间轴那一列的原文（8分 / 1时22分），空串 = 这条本就不该有，
+       写空串等于把属性清掉（思源不保留空值属性）。 */
+    async _syncIntervalAttrs(rootId) {
+      if (!this._intervalAttrOn() || !this._validId(rootId)) return;
+      const aInterval = this._attr(LIFELOG_INTERVAL_KEY);
       let rows = [];
       try {
         const resp = await this._request("/api/query/sql", {
@@ -11455,10 +12147,10 @@
         /* 同分钟的先后无所谓，但要有个确定的次序 —— 以块 ID 决胜负 */
         .sort((a, b) => a.min - b.min || (a.id < b.id ? -1 : 1));
       if (!recs.length) return;
-      /* 间隔口径 = 时间计算模式 + 类型统计口径（_typeStatRole）：
+      /* 间隔口径 = 时间计算模式 + 类型统计口径（_typeStatRole），
+         与时间轴 / 表格 / 统计共用同一份算法，本函数不另算一套：
          end（默认）当前 − 上一条；start 下一条 − 当前。
          「只记录」的类型整条退出这条链（间隔一律留空），「起点」是断点 ——
-         跟时间轴 / 表格 / 统计同一套规矩，本插件不给对方插件算第二套数。
          没有邻居（第一条 / 最后一条）、邻居是断点、或间隔非正 → 空串 = 不该有这个属性 */
       const mode = this._timeCalcMode();
       const roles = recs.map((x) => this._typeStatRole(x.type));
@@ -11468,7 +12160,7 @@
       });
       /* 先全部按「没有间隔」铺底：只记录的那几条天然就落在这个底上 */
       const want = new Map();
-      recs.forEach((x) => want.set(x.id, { time: x.time, interval: "" }));
+      recs.forEach((x) => want.set(x.id, ""));
       for (let k = 0; k < chain.length; k++) {
         const i = chain[k];
         let dur = null;
@@ -11482,79 +12174,64 @@
             dur = recs[i].min - recs[chain[k - 1]].min;
           }
         }
-        want.set(recs[i].id, {
-          time: recs[i].time,
-          interval: dur !== null && dur > 0 ? `${dur}m` : "",
-        });
+        want.set(recs[i].id, dur !== null && dur > 0 ? fmtDurText(dur) : "");
       }
-      /* 现有的两个属性一次查齐（join blocks 用 root_id 圈定本文档） */
+      /* 现有属性一次查齐（join blocks 用 root_id 圈定本文档） */
       const have = new Map();
       try {
         const resp = await this._request("/api/query/sql", {
           stmt:
-            `SELECT a.block_id AS bid, a.name AS name, a.value AS value ` +
+            `SELECT a.block_id AS bid, a.value AS value ` +
             `FROM attributes a INNER JOIN blocks b ON b.id = a.block_id ` +
-            `WHERE b.root_id = '${rootId}' AND a.name IN ('${TOMATO_IDEA_TIME_ATTR}', '${TOMATO_IDEA_INTERVAL_ATTR}')`,
+            `WHERE b.root_id = '${rootId}' AND a.name = '${aInterval}'`,
         });
         if (resp && resp.code === 0 && Array.isArray(resp.data)) {
           for (const row of resp.data) {
-            if (!have.has(row.bid)) have.set(row.bid, {});
-            have.get(row.bid)[row.name] = String(row.value == null ? "" : row.value);
+            have.set(row.bid, String(row.value == null ? "" : row.value));
           }
         }
       } catch (e) {
         /* 查不到就当全空，走全量写 */
       }
-      for (const [blockId, w] of want) {
-        const cur = have.get(blockId) || {};
-        const patch = {};
-        if (cur[TOMATO_IDEA_TIME_ATTR] !== w.time) {
-          patch[TOMATO_IDEA_TIME_ATTR] = w.time;
-        }
-        if (w.interval === "") {
-          /* 间隔消失了（改成第一天条 / 时间被改没）：把旧值清掉 */
-          if (cur[TOMATO_IDEA_INTERVAL_ATTR]) {
-            patch[TOMATO_IDEA_INTERVAL_ATTR] = "";
-          }
-        } else if (cur[TOMATO_IDEA_INTERVAL_ATTR] !== w.interval) {
-          patch[TOMATO_IDEA_INTERVAL_ATTR] = w.interval;
-        }
-        if (!Object.keys(patch).length) continue;
+      for (const [blockId, text] of want) {
+        const cur = have.get(blockId) || "";
+        /* 空串只用来「清掉旧值」；本来就空的不写，省一次请求 */
+        if (text === "" ? !cur : cur === text) continue;
         try {
           await this._request("/api/attr/setBlockAttrs", {
             id: blockId,
-            attrs: patch,
+            attrs: { [aInterval]: text },
           });
         } catch (e) {
-          console.warn(`${NAME}：写番茄速记属性失败`, e);
+          console.warn(`${NAME}：写间隔属性失败`, e);
         }
       }
     }
 
     /* 记录有变动后调这个：800ms 防抖后走该文档的串行队列做一次同步。
        传块 ID 或文档 ID 都行（统一归到根再排队，保证与打标同一把锁）。
-       开关没开就直接返回 —— 所有记录路径都可以无脑调，不增加判断成本。 */
-    _scheduleTomatoSync(id) {
-      if (!this._tomatoIdeaOn() || !this._validId(id)) return;
-      const prev = this._tomatoSyncTimers.get(id);
+       id 不合法就直接返回 —— 所有记录路径都可以无脑调，不增加判断成本。 */
+    _scheduleIntervalSync(id) {
+      if (!this._validId(id)) return;
+      const prev = this._intervalSyncTimers.get(id);
       if (prev) clearTimeout(prev);
       const timer = setTimeout(() => {
-        this._tomatoSyncTimers.delete(id);
+        this._intervalSyncTimers.delete(id);
         (async () => {
-          const root = await this._tomatoRootIdOf(id);
+          const root = await this._rootIdOf(id);
           if (!root) return;
-          await this._serial(root, () => this._syncTomatoAttrs(root));
-        })().catch((e) => console.warn(`${NAME}：同步番茄速记属性失败`, e));
-      }, TOMATO_SYNC_DELAY);
-      this._tomatoSyncTimers.set(id, timer);
+          await this._serial(root, () => this._syncIntervalAttrs(root));
+        })().catch((e) => console.warn(`${NAME}：同步间隔属性失败`, e));
+      }, INTERVAL_SYNC_DELAY);
+      this._intervalSyncTimers.set(id, timer);
     }
 
-    /* 开启开关 / 切换时间计算模式后，把打过标的历史记录全部补一遍。
-       顺序跑（一篇同步完再下一篇），几百篇也只是几百个小查询，不压垮内核；
-       中途把开关关掉就立刻收手。 */
-    async _backfillTomatoAttrs() {
-      if (this._tomatoBackfilling) return;
-      this._tomatoBackfilling = true;
+    /* 开启间隔属性开关 / 切换时间计算模式 / 改动类型统计口径后，
+       把打过标的历史记录全部补一遍。
+       顺序跑（一篇同步完再下一篇），几百篇也只是几百个小查询，不压垮内核。 */
+    async _backfillIntervalAttrs() {
+      if (this._intervalBackfilling) return;
+      this._intervalBackfilling = true;
       try {
         const aDate = this._attr("date");
         let rows = [];
@@ -11571,17 +12248,18 @@
         }
         const rids = rows.map((r) => r.rid).filter((x) => this._validId(x));
         if (!rids.length) return;
-        showMessage(`${NAME}：正在为 ${rids.length} 篇文档补写番茄速记属性…`);
+        showMessage(`${NAME}：正在为 ${rids.length} 篇文档补写记录属性…`);
         for (const rid of rids) {
-          if (!this._tomatoIdeaOn()) break;
+          /* 补写途中用户把开关关掉了就立刻收手 —— 别再往一个已经关掉的功能里写属性 */
+          if (!this._intervalAttrOn()) break;
           try {
-            await this._serial(rid, () => this._syncTomatoAttrs(rid));
+            await this._serial(rid, () => this._syncIntervalAttrs(rid));
           } catch (e) {
-            console.warn(`${NAME}：补写番茄速记属性失败`, e);
+            console.warn(`${NAME}：补写记录属性失败`, e);
           }
         }
       } finally {
-        this._tomatoBackfilling = false;
+        this._intervalBackfilling = false;
       }
     }
 
@@ -11727,6 +12405,94 @@
       el.textContent = rules.join("\n");
     }
 
+    /* 间隔角标：把记录间隔贴到块正文右侧。
+       这段显示原先由用户自己装一段 CSS 代码片段实现（「记录间隔显示片段 v5」），
+       现在直接由插件注入 —— 装上就有，少维护一份东西，也不会因插件升级而失效。
+       实现全程纯 CSS（::after + attr(属性名)）：浏览器只做 paint。
+       反例：如果改成 JS 给每个块插一个角标元素，就是每条记录一次 DOM 写 + 一次重排，
+       几百条记录就够卡了，而且文档每次重渲染都得重插一遍 —— 所以不这么做。
+       属性名跟着「属性名前缀」设置走，因此每次重建样式表，而不是写死在 index.css。
+
+       依赖：_intervalAttrOn()（有属性才有值可显示） + _intervalBadgeOn()（用户开关）。
+       任一为否就把整段样式撤掉；已写入的属性不动，数据不丢。 */
+    _ensureIntervalStyle() {
+      if (typeof document === "undefined" || !document.head) return;
+      let el = document.getElementById(INTERVAL_STYLE_ID);
+      if (!(this._intervalAttrOn() && this._intervalBadgeOn())) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        return;
+      }
+      if (!el) {
+        el = document.createElement("style");
+        el.id = INTERVAL_STYLE_ID;
+        document.head.appendChild(el);
+      }
+      const attr = this._attr(LIFELOG_INTERVAL_KEY);
+      el.textContent = [
+        /* ① 正文容器改成「行内盒」—— 角标才会跟在**最后一个字**后面。
+           ------------------------------------------------------------------
+           内核把段落正文装在一个**块级** div[contenteditable=true] 里
+           （已核对安装目录 resources/stage/build/app/base.*.css：对
+           [contenteditable=true] 只有 cursor / min-width，没有任何 display 规则）。
+           挂在块上的 ::after 是块的最后一个子盒，其前面是一个块级盒 ——
+           于是它只能另起一行（早期的 CSS 片段就是卡在这一步）。
+           把正文改成 display:inline，父块的行内流就变成
+           「…正文… + ::after」，角标自然落在**末行最后一个字**之后：
+             · 单行、文字短 → 紧跟正文末尾（原有观感不变）；
+             · 换行（长记录）→ 落到末行末尾，而不是被推到块的右边缘。
+           早期实现用 display:flex 把角标提上来，代价是角标成了 flex 项：
+           正文换行时占据整行宽度，角标只能贴在**块的右边缘**（用户反馈：
+           「换行后间隔跑到最右边去了」）。行内流没有这个问题。
+           只改 display，不碰 padding / 背景 —— 块的定位、底色、悬停高亮、
+           编辑行为都不受影响。 .protyle-attr 在内核里是 position:absolute，
+           本来就脱离文档流，不会插进正文和角标之间。
+           覆盖范围：_syncIntervalAttrs 只往 type='p' 的块写属性，而段落块的正文
+           一定是它的**直接子** div[contenteditable=true]（已用
+           /api/block/getBlockDOM 核过真实 DOM），所以这一条就够，
+           不必再区分 .p / .li / .sb 的嵌套差异。 */
+        `.protyle-wysiwyg div[${attr}] > div[contenteditable="true"],`,
+        `.protyle-wysiwyg div.li[${attr}] > div[contenteditable="true"] {`,
+        `  display: inline;`,
+        `}`,
+        /* ② 间隔角标：取属性值当文本，跟着行内正文走。
+           ::after 必须留在**带属性的那个块**上 —— attr() 读的是伪元素宿主自己
+           的属性，挂到正文那层就读不到值了（正文元素上没有这个属性）。
+           靠 ① 把正文变成行内盒，这个 ::after 才落到文字末尾。
+           列表项形态并列一条：内核 .li::before 已被项目符号/折叠线占用，
+           同类伪元素规则容易互相压，抬一档特异性更稳。 */
+        `.protyle-wysiwyg div[${attr}]::after,`,
+        `.protyle-wysiwyg div.li[${attr}]::after {`,
+        `  content: attr(${attr});`,
+        `  white-space: nowrap;`, // 值再长也保持单行，不会从「27分」中间断开
+        `  pointer-events: none;`, // 鼠标事件穿透到块本体，少一点命中计算
+        `  margin-left: 8px;`,
+        `  font-size: 12px;`,
+        `  color: var(--b3-theme-on-surface-light);`, // 用实色，省掉一层 alpha 合成
+        /* ★★★ 收编内核「悬停/选中高亮框」规则的四个属性 ★★★
+           内核有 .protyle-wysiwyg--hl::after / --select::after / --select-mode::after
+           （特异性 0,1,1，语义：鼠标移到块把手 / 选中块时给 ::after 打底色），
+           声明了 position:absolute / left:0 / top:0 / width:100% / height:100% +
+           主色浅底。本规则特异性更高，凡我方声明过的属性一律压过；但若只声明
+           content 系，这四个值就会穿透进来 —— position:absolute 把 ::after 拽出
+           行内流，left/top:0 钉到块左上角，width/height:100% 撑成整块大小的箱子
+           （块本身 position:relative），于是悬停瞬间出现一张绿色圆角卡片。
+           显式收编这四值即可；只作用于本片段自己的伪元素，无副作用。 */
+        `  position: static !important;`,
+        `  width: auto !important;`,
+        `  height: auto !important;`,
+        `  background-color: transparent !important;`,
+        `}`,
+        /* ④ 角标占走 ::after 槽后，非记录行的块悬停就没有内核高亮底色了，补回来。
+           记录行（.tt-hit）另有插件自己的记录底色，跳过不动，免得两套底色打架。 */
+        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--hl:not(.tt-hit),`,
+        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--select:not(.tt-hit),`,
+        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--select-mode:not(.tt-hit) {`,
+        `  background-color: var(--b3-theme-primary-lightest) !important;`,
+        `  border-radius: var(--b3-border-radius);`,
+        `}`,
+      ].join("\n");
+    }
+
     /* 输入/换行时同步刷新段落的视觉标记（不发请求、不持久化属性），
        用来抵消 600ms 防抖带来的滞后。
        注意：这里必须一并判定「记录范围」—— 只按文本格式打标的话，
@@ -11788,8 +12554,8 @@
         if (state === "tagged") {
           /* 属性已经入库，颜色交给样式表的属性选择器，撤掉临时的内联值 */
           p.style.removeProperty("--tt-c");
-          /* 这条记录的时间变了，本文档的番茄速记间隔要跟着重算 */
-          this._scheduleTomatoSync(docId);
+          /* 这条记录的时间变了，本文档的间隔属性要跟着重算 */
+          this._scheduleIntervalSync(docId);
           /* 光标还停在这一行就先不刷侧栏 —— 用户还在写，内容会一次次变，
              跟着刷就是一闪一闪；等他换行或移开光标再统一刷一次。 */
           if (this._isEditingParagraph(p)) this._pendingRefreshParas.add(p);
@@ -11884,11 +12650,11 @@
             }
           }
 
-          /* 记录被删掉了：列表和日历要跟着减一条；邻居的番茄间隔也要重算
+          /* 记录被删掉了：列表和日历要跟着减一条；邻居的间隔也要重算
              （延迟 800ms 才查库 —— 删除要等内核落库，立刻查还会查到它） */
           if (removedRecord) {
             this._notifyRecordsChanged();
-            this._scheduleTomatoSync(this._docIdOf(editor));
+            this._scheduleIntervalSync(this._docIdOf(editor));
           }
 
           /* 待处理的段落累积起来，不要每来一批就把上一批丢掉 ——
@@ -11981,8 +12747,8 @@
       let tagged = 0;
       let unchanged = 0;
       let failed = 0;
-      /* 本次扫出新记录的文档：扫完各补一次番茄速记属性的同步 */
-      const tomatoDocs = new Set();
+      /* 本次扫出新记录的文档：扫完各补一次间隔属性的同步 */
+      const intervalDocs = new Set();
       for (const p of paragraphs) {
         const docId = this._docIdOf(p);
         if (!this._validId(docId)) continue;
@@ -11997,14 +12763,14 @@
           );
           if (state === "tagged") {
             tagged++;
-            tomatoDocs.add(docId);
+            intervalDocs.add(docId);
           } else if (state === "unchanged") unchanged++;
           else failed++;
         } catch (e) {
           failed++;
         }
       }
-      if (tomatoDocs.size) tomatoDocs.forEach((d) => this._scheduleTomatoSync(d));
+      if (intervalDocs.size) intervalDocs.forEach((d) => this._scheduleIntervalSync(d));
       /* 有新增或更新就顺带把 Dock 与日历刷一遍，省得用户再手点一次刷新 */
       if (tagged > 0) this._notifyRecordsChanged();
       const total = tagged + unchanged + failed;

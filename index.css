@@ -568,6 +568,74 @@
   opacity: 0.8;
   white-space: nowrap;
 }
+/* ---- 内容口径三件套：命中词 / 排除词 / 数字次数 ----
+   命中词与排除词并排两个小输入框；「数字次数」是一枚可切换的胶囊，
+   打开之后右边再长出「取值」那排分段按钮（复用 .tt-habitpick__units 那套）。
+   两行各自带一条虚线分隔，与上面的「时间范围」行同一观感。 */
+.tt-habitpick__kwrow,
+.tt-habitpick__numrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--b3-border-color);
+}
+.tt-habitpick__kw {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+}
+.tt-habitpick__kw input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 5px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  font-size: 11.5px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.tt-habitpick__kw input:focus {
+  border-color: var(--b3-theme-primary);
+}
+/* 「数字次数」开关：关 = 描边浅字，开 = 主色淡底（与 .tt-habitpick__unit.on 同一套观感） */
+.tt-habitpick__numon {
+  padding: 2px 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11.5px;
+  line-height: 1.7;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.tt-habitpick__numon:hover {
+  background: var(--b3-list-hover);
+}
+.tt-habitpick__numon.on {
+  background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
+  color: var(--b3-theme-primary);
+}
+/* 一句说明：浅字占位、不抢视线；自己占满一整行（分段按钮留在上一行） */
+.tt-habitpick__numhint {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.8;
+}
 /* 门槛卡头部的分组小标：显示该习惯归属的分组，没分组不占位 */
 .tt-habitpick__gtag {
   padding: 1px 6px;
@@ -5817,7 +5885,8 @@ textarea.north-caltab-edit-input {
 .tt-metrics__item-kw,
 .tt-metrics__item-target,
 .tt-metrics__item-split,
-.tt-metrics__item-exclude {
+.tt-metrics__item-exclude,
+.tt-metrics__item-default {
   min-width: 0;
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--b3-border-color) 50%, transparent);
@@ -5846,6 +5915,11 @@ textarea.north-caltab-edit-input {
 .tt-metrics__item-split,
 .tt-metrics__item-exclude {
   flex: 1 1 120px;
+}
+/* 「默认值」自己占一整行：它的 placeholder（「没记录到的那天用它补（留空 = 不补）」）
+   比同排那几个都长，挤在 120px 里会被截掉 */
+.tt-metrics__item-default {
+  flex: 1 1 100%;
 }
 /* 卡片里那个「类型」下拉：卡片头是横排的，给它一个上限宽度；
    菜单可以比触发器宽一点，长类型名不至于被截 */
@@ -5899,6 +5973,7 @@ textarea.north-caltab-edit-input {
 .tt-metrics__item-target:focus,
 .tt-metrics__item-split:focus,
 .tt-metrics__item-exclude:focus,
+.tt-metrics__item-default:focus,
 .tt-metrics__item-dec:focus {
   border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
 }
