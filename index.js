@@ -30,7 +30,17 @@
 
   /* 日历标签页里已经接了视图的段位。八个都接上了 ——
      以后再加段位，不在这里的点了只切高亮、不换内容。 */
-  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "stats", "metric"];
+  /* board（工作台）= 一屏总览仪表盘，今天 / 习惯 / 记录统计三组从上往下排：
+       今天     —— 今日进度（永远说「今天」，与周期无关）
+       习惯     —— 完成热力图 + 习惯打卡点阵
+       记录统计 —— 周期概览 / 记录热力 / 分布 / 明细 / 走势 / 时长 / 类型分布
+       另加     —— 类型时间轴 + 指标走势
+     它原本与「统计」（stats）并列，两个段位摆在一起晃眼：**统计那 8 块里有 6 块
+     也是记录统计**，只是度量不同（一个数条数、一个看习惯达标），所以并成一个。
+     stats 段位已退役 —— 它的区块由 _buildStatsParts() 交给工作台拼装；
+     老存档里的 calTabViews.stats 不再被读取，_calViewOn() 对不在表里的 key 一律
+     返回 false，于是正在看 stats 的会话 / 程序化跳转都会自动落到可用段位。 */
+  const CAL_TAB_VIEWS = ["month", "week", "three", "day", "table", "habit", "board", "metric"];
 
   /* 段位中文标签：顶栏 seg() 与设置里「视图显示」的芯片共用一份，改一处两边都跟着变 */
   const CAL_TAB_VIEW_LABELS = {
@@ -40,7 +50,7 @@
     day: "日",
     table: "表格",
     habit: "习惯",
-    stats: "统计",
+    board: "工作台",
     metric: "指标",
   };
 
@@ -126,6 +136,67 @@
   ];
   const METRIC_SCOPE_DEFAULT = "90";
 
+  /* 工作台段位看的那一段：**过去一年**，右端是锚点（默认今天）。
+     顶栏的翻页 / 今天挪的就是这个锚点 —— 整屏（热力 / 打卡 / 指标）跟着滚。
+     热力图本来就该按年读（参考图那 53 列），所以窗口长度固定，不做范围段位。 */
+  const BOARD_SPAN_DAYS = 365;
+  const BOARD_STEP_DAYS = 30;
+
+  /* ---- 工作台的页内分类（胶囊段位）----
+     「统计」并进来之后这一屏有 14 块，一路往下滚又长又找不到想看的那段，
+     所以照 pinch 那套给它加一条页内胶囊（`.stats-tabs` 同款：圆角胶囊、
+     选中态反色实心）。
+
+     划分**只按内容归属**，不按"哪个视图搬来的"，三条规矩：
+       ① 「今日进度」**不进分类**，它是这一屏的常驻页头 —— 那张卡说的是"今天"
+          （问候 / 日期 / 今日习惯进度 / 随想字数 / 今日日记入口），
+          与「看哪一段时间」无关，塞进任何一个周期分类都不对。
+       ② 剩下 13 块按数据域分四类，**每块只归一类、不重复**：
+            习惯 —— 完成热力 / 打卡点阵（习惯视角）
+            记录 —— 周期概览数字卡 / 记录热力 / 每日记录 / 分布 / 每日走势。
+                   数字卡里那 6 个数（记录次数、有记录天数、日均、单日最多、
+                   类型数、连续天数）**全部由记录算出**，所以它属于这里，
+                   不属于"概览"。
+            类型 —— 类型时间轴 / 类型时长汇总 / 统计明细 / 类型分布环形
+                   （数组里的顺序就是铺法，自上而下）
+            指标 —— 指标走势
+       ③ 「概览」这个分类**不要**：它原本是"把统计与习惯的关键信息合在一屏"的
+          过渡说法，内容本来就分属"今天"和"记录"。硬凑一个"什么都放一点"的
+          概览，只会让同一份数据在一屏里被算两遍，也让人怀疑两处是不是不一样。
+
+     分类状态只活在内存（与 _calTabStatsPeriod 同套做法），不落盘 ——
+     切分类是最频繁的交互，不该每次都触发运行期写盘。
+     keys 是块的代号，与 _buildHabitBoardHtml 里那张 blockHtml 表一一对应。 */
+  /* ⚠️ 块代号**全表唯一**。曾经栽过：习惯那块从 "heat" 改名成 "trend"，
+     正好撞上记录分类里原有的 "trend" —— blockHtml 是个对象字面量，
+     同名后者胜，于是习惯分类放出来的是记录那张「每日走势」，
+     而新做的卡片被静默挤掉。单测现在会查重复，改代号时别偷懒。 */
+  const BOARD_TABS = [
+    { value: "habit", label: "习惯", blocks: ["trendDelta", "habitGrid"] },
+    { value: "record", label: "记录", blocks: ["cards", "recHeat", "daily", "dist", "trendLine"] },
+    {
+      value: "type",
+      label: "类型",
+      /* 顺序就是铺法（渲染直接按这个数组来），自上而下：
+         类型时间轴 → 类型时长汇总 → 统计明细 → 类型分布。 */
+      blocks: ["timeline", "duration", "detail", "typeDist"],
+    },
+    { value: "metric", label: "指标", blocks: ["metric"] },
+  ];
+  const BOARD_TAB_VALUES = BOARD_TABS.map((t) => t.value);
+  /* 工作台三张「类型」卡**各自的默认周期**（卡头那颗 pill 的初值）。
+     用户在卡上按过 pill 之后就看他选的，按「今」或顶栏「今天」复位到这里。
+     集中在一处是有原因的：这个字面量原本散在三个地方（构造函数初始化、
+     卡片的「今」、顶栏的「今天」），改一处漏一处就会出现
+     「按了今天，卡还停在别的周期」这种同一屏对不上的状态。
+       dur  —— **月**：它是"这段时间各类型各花了多久"，按年看时每行几百小时、
+               长短差异被压平，按月才看得出差别（这是使用者的明确要求）；
+       tl   —— 日：时间轴本来就是单日的读法。 */
+  const BOARD_CARD_PERIOD_DEFAULT = { dur: "month", tl: "day" };
+  /* 默认停在「习惯」：今日进度已经把"今天"答了，接着最想知道的
+     就是"这一年的习惯坚持得怎么样"（完成热力是这一屏最醒目的一张）。 */
+  const BOARD_TAB_DEFAULT = "habit";
+
   /* ---- 习惯视图 ----
      习惯 = 用户从「记录类型」里自己挑出来的几个（挑哪些存在 settings.habitTypes，
      是个类型名数组）。挑中的类型才追踪，没挑的不算 —— 不然「记录」这种量大又杂的
@@ -182,6 +253,47 @@
     { value: "value", label: "合计" },
     { value: "days", label: "天数" },
   ];
+  /* ---- 习惯的「维持成本」档 ----
+     出处是一套讲「国策」的思路：好的个人规则应当为生活中的选项做**减法**，
+     而不是加法。被动 / 半被动 / 机制型的规则维护成本几乎为零、逻辑上不可能崩溃，
+     是「根国策」的绝佳选择；纯主动的规则每次都要重新过一遍意志力，
+     一崩就是整条链跟着崩（而拆开的小规则，崩一个其余照样存活）。
+
+     这也是前置关系图一直缺的一个维度：你很容易拿一个**需要意志力**的习惯，
+     去撑另一个**需要意志力**的习惯 —— 那样链条其实很脆。四档由硬到软：
+       mech    机制  —— 设一次就不用管（23:00 自动把屏幕调成黑白、闹钟、自动化规则）
+       passive 被动  —— 特定场景下「不做某事」（起床后 30 分钟内不碰娱乐 App）
+       semi    半被动 —— 挂在几乎必然发生的触发上，「如果 A 就 B」（进门就开 15 分钟闹钟）
+       active  主动  —— 每次都要自己决定（每天喝 5 杯水）
+
+     **不标就是没标**：不参与任何判断、图上也不画 —— 这块是「告示牌」，
+     杵在那儿提醒你可以用这个技巧，不想用的人完全不受影响（老配置零迁移）。 */
+  const HABIT_COSTS = [
+    { value: "mech", label: "机制" },
+    { value: "passive", label: "被动" },
+    { value: "semi", label: "半被动" },
+    { value: "active", label: "主动" },
+  ];
+  const HABIT_COST_LABEL = {
+    mech: "机制",
+    passive: "被动",
+    semi: "半被动",
+    active: "主动",
+  };
+  /* 关系图那根竖条按「这条支撑有多硬」分三档配色（不是四档）——
+     机制与被动都是一次设定之后再不用管，合成同一档，少一次辨认 */
+  const HABIT_COST_LEVEL = {
+    mech: "hard",
+    passive: "hard",
+    semi: "mid",
+    active: "soft",
+  };
+  /* 低维护成本的三档：「建议起点」优先挑这几个（胜于易胜）。
+     注意 key 只可能是上面四档或空串（读取时已白名单校验），查表是安全的。 */
+  const HABIT_COST_LOW = { mech: 1, passive: 1, semi: 1 };
+  /* 四档各是什么意思：设置面板那行的悬停提示。顺带把「再点一次取消」说清楚 */
+  const HABIT_COST_TIP =
+    "机制：设一次就不用管 · 被动：特定场景下不做某事 · 半被动：如果 A 就 B · 主动：每次都要自己决定。再点一次同一档 = 取消标注";
   /* 习惯「查看窗口」的快捷预设：存的是**名字**不是日期 —— 相对「今天」每次现算，
      所以「本月」到了下个月自己就是新的一月，不会停留在旧区间。
      留空的 value 表示「跟随顶部」（不存任何东西），这也是老数据的状态。 */
@@ -202,6 +314,30 @@
     d30: "近 30 天",
     d100: "近 100 天",
   };
+
+  /* ---- 习惯关系图（前置习惯）的几何 ----
+     需求：一个习惯总也养不成的时候，往回找它的**前置习惯** ——
+     先做阻力最小的那一步，目标习惯才立得住。
+
+     关系图按前置链分列（没有前置的在最左），同一列内上下排开；
+     节点是绝对定位的卡片、连线是铺在下面的一层 SVG。
+     三个尺寸都写死，**不测 DOM** —— 卡片等宽等高、列距一致，
+     连线才不会忽长忽短；也因此这一块不需要像指标折线那样二次成图，
+     重绘成本几乎为零（几十张卡也只是几十个 div）。 */
+  /* 卡片宽度与列距是量出来的：四列正好铺满一个常规宽度的标签页
+     （4 × 184 + 3 × 46 = 874，比常规宽度下的 896 内容宽还留了一档余量），
+     再多就横向滚动 —— 图宽了拖横条，卡片不压缩，连线才对得上。 */
+  const CHAIN_CARD_W = 184;
+  /* 卡片高度必须与 index.css 里 .north-caltab-chain-card 的 height 一致 ——
+     连线端点按这个数算，两边差一点箭头就扎不进卡片 */
+  const CHAIN_CARD_H = 86;
+  /* 列与列之间的水平空档：要放得下「引出 → 拐弯 → 进卡片」这段曲线 */
+  const CHAIN_COL_GAP = 46;
+  const CHAIN_ROW_GAP = 18;
+  /* 关系图卡头那枚展开 / 收起箭头：内联 path，不依赖思源图标清单
+     （与习惯分组那张卡的 chev 同一个形状，收起时由 CSS 转 90°） */
+  const CHAIN_CHEV_SVG =
+    '<svg class="north-caltab-chain-chev" viewBox="0 0 24 24" width="12" height="12"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   /* 门槛的单位后缀：3 次 / 30 分 */
   const habitUnitLabel = (unit, v) => (unit === "min" ? `${v} 分` : `${v} 次`);
   /* 目标一句话：每天 ≥ 5 次 / 每周 ≥ 3 天 / 每月 < 10 次 —— 卡片上的小徽标用。
@@ -953,6 +1089,23 @@
          顶栏的翻页挪的就是它 —— 按一次挪一个「查看范围」的步长，
          到了今天就到尽头，再往后按不动；「今天」把它清回 null。 */
       this._calTabMetricAnchor = null;
+      /* 工作台「类型时间轴」单独看的那一天（点热力图上某一格进来的）。
+         null = 跟着上面那张「过去一年」的右端走（默认就是今天）——
+         翻页时整条时间轴跟着窗口挪，点了某一天才钉住不动，点「×」回到右端。 */
+      this._calTabBoardDay = null;
+      /* 工作台当前看的是哪个页内分类（习惯 / 记录 / 类型 / 指标），见 BOARD_TABS。
+         只活在内存里 —— 切分类是最频繁的交互，不写盘；
+         重开标签页从默认分类开始。 */
+      this._calTabBoardTab = BOARD_TAB_DEFAULT;
+      /* 工作台各张卡自己的周期与锚点（类型时长汇总 / 类型时间轴），默认值见
+         BOARD_CARD_PERIOD_DEFAULT。与统计视图「时长统计」那套局部周期同款：
+           period = "board"（跟工作台那段滚动的一年）/ "day" / "week" / "month" / "year"；
+           anchor = null 时跟着工作台窗口的右端，卡上翻过页才钉住自己那一段。
+         时间轴那张只给日 / 周 / 月三档（它天生是单日的图）。 */
+      this._calTabBoardDurPeriod = BOARD_CARD_PERIOD_DEFAULT.dur;
+      this._calTabBoardDurAnchor = null;
+      this._calTabBoardTlPeriod = BOARD_CARD_PERIOD_DEFAULT.tl;
+      this._calTabBoardTlAnchor = null;
       /* 指标管理弹窗（挂在 body 上，卸载时要收掉，同类型管理） */
       this._metricModal = null;
       /* 指标改动攒着一起落盘（同 _typesDirty 那套防抖） */
@@ -978,6 +1131,11 @@
       /* 习惯卡上「查看窗口」设置条：开着的那个习惯名（"" = 都关着）。
          就地展开、不做浮层 —— 卡片网格会裁掉溢出的浮层。 */
       this._calTabHabitViewOpen = "";
+      /* 习惯关系图（前置习惯）：编辑模式开关、正在编辑的那个习惯名。
+         展开 / 收起落盘（habitChainOpen），编辑态只活在内存里 ——
+         下次进来是「看图」，不该一打开就满屏可点。 */
+      this._calTabChainEdit = false;
+      this._calTabChainPick = "";
       /* 搜索输入触发的重绘要把焦点还给输入框（见 _paintCalendarTab），
          这个标记只在该次重绘里有效 */
       this._calTabSearchFocus = false;
@@ -1947,6 +2105,12 @@
                           "lv1"
                         )}
                     </span>
+                    <span class="tt-habitpick__goalrow" data-habit-costrow data-tip="${escapeHtml(
+                      HABIT_COST_TIP
+                    )}">
+                        <span>维持成本</span>
+                        ${segHtml(HABIT_COSTS, cfg.cost || "", "cost")}
+                    </span>
                 </div>
                 ${dateRow}
                 ${numRow}
@@ -2043,6 +2207,24 @@
           const type = box.dataset.habitCfg;
           const cfg = this._habitConfig(type);
           cfg.num = !cfg.num;
+          this._habitSetConfig(type, cfg);
+          this._mountHabitPicker(host);
+          this._refreshCalendarTabs();
+          return;
+        }
+        /* 维持成本档（国策框架）：四档，和上面那排通用分段不共用逻辑 ——
+           它多一条「再点一次同一档 = 取消标注」：这块是**可选的告示牌**，
+           得能摘下来，摘了就不参与任何判断、图上也不画。
+           所以这一段写在通用循环之前，自己处理。 */
+        const costBtn =
+          e.target.closest && e.target.closest("[data-habit-cost]");
+        if (costBtn) {
+          const box = costBtn.closest("[data-habit-cfg]");
+          if (!box) return;
+          const type = box.dataset.habitCfg;
+          const cfg = this._habitConfig(type);
+          const v = costBtn.dataset.habitCost || "";
+          cfg.cost = cfg.cost === v ? "" : v;
           this._habitSetConfig(type, cfg);
           this._mountHabitPicker(host);
           this._refreshCalendarTabs();
@@ -3022,7 +3204,13 @@
           .then((records) => {
             this._lifelogDockCache = records || [];
             this._lifelogDockCacheTime = Date.now();
-            if (this._calTabView === "metric") this._refreshCalendarTabs();
+            /* 指标视图与「习惯工作台」都要用这份数据：谁在看就刷新谁 ——
+               习惯工作台开着时，首屏也要能把折线补上（否则要等手动刷新）。 */
+            if (
+              this._calTabView === "metric" ||
+              this._calTabView === "board"
+            )
+              this._refreshCalendarTabs();
           })
           .catch((e) => console.warn(`${NAME}：指标数据加载失败`, e))
           .finally(() => {
@@ -3078,6 +3266,215 @@
       }
       if (a.m === b.m && a.d === b.d) return `${a.m}月${a.d}日`;
       return `${a.m}月${a.d}日 ~ ${b.m}月${b.d}日`;
+    }
+
+    /* 工作台里「过去一年」那一段：以**记录统计那套周期的锚点**为右端（含右端那天）。
+       合并前工作台有自己的锚点（_calTabBoardAnchor），现在并成同一个 ——
+       一屏只该有一个周期，否则顶栏按了翻页会有区块没跟着动。
+       热力图 / 打卡点阵 / 指标走势三块都吃这一份窗口，所以三块永远对得上。 */
+    _boardWindow() {
+      const anchor =
+        this._calTabStatsAnchor instanceof Date
+          ? this._calTabStatsAnchor
+          : new Date();
+      const to = this._calKey(anchor);
+      const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+      d.setDate(d.getDate() - (BOARD_SPAN_DAYS - 1));
+      return { from: this._calKey(d), to, days: BOARD_SPAN_DAYS };
+    }
+
+    /* 工作台那张「过去一年」的右端（Date）。三张「类型」卡在锚点没定过时
+       就锚在它上面，所以顶栏翻页时三张卡跟着一起挪。 */
+    _boardWindowEndDate() {
+      const w = this._boardWindow();
+      return new Date(`${w.to}T00:00:00`);
+    }
+
+    /* 工作台各张卡自己的周期与锚点，字段名按 scope 拼：
+       scope = "dur"  → _calTabBoardDurPeriod / _calTabBoardDurAnchor（类型时长汇总）；
+       scope = "tl"   → _calTabBoardTlPeriod  / _calTabBoardTlAnchor（类型时间轴）。
+       （早先还有 scope = "type" 的「各类型条数」，那张卡已按使用者要求移除，
+       它那套 *_calTabBoardType* 状态也一并删了 —— 想恢复就把状态、卡片、
+       BOARD_TABS 里的 "typeCount" 一起加回来。） */
+    _boardCardField(scope) {
+      return scope === "dur" ? "Dur" : scope === "tl" ? "Tl" : "Type";
+    }
+
+    /* 工作台这几张卡各自的窗口：近一年 / 日 / 周 / 月 / 年 ——
+       与统计视图「时长统计」那套局部周期同款（卡头那颗 pill + 翻页 + 周期文字
+       + 合计），只多一档「近一年」：
+         「近一年」= 工作台自己那段滚动的一年（跟着顶栏翻页一起挪），
+         也就是这几张卡**默认**看的那一段 —— 默认状态与热力图 / 指标走势对齐，
+         想细看某一天 / 某一周就切到下面那四档，切过去是自然周期（与统计视图
+         的「日 / 周 / 月 / 年」一字不差）。
+       周按设置里的「一周从周几开始」对齐：工作台的热力图 / 打卡点阵 / 时间轴
+       都跟着这个设置走，这一张不跟着就会在同一屏里出现两种「周」。
+       anchor 为空 = 锚在工作台窗口的右端（默认），不是「今天」——
+       所以顶栏翻页时卡片跟着挪；在卡上按过翻页之后才钉住自己那一段。 */
+    _boardCardWindow(period, anchor) {
+      /* 「近一年」直接复用工作台那段滚动的一年 */
+      if (period === "board") {
+        const w = this._boardWindow();
+        return {
+          period,
+          from: w.from,
+          to: w.to,
+          label: this._metricRangeLabel(w.from, w.to),
+          board: true,
+        };
+      }
+      const base = anchor instanceof Date ? anchor : this._boardWindowEndDate();
+      const a = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      const k = (d) => this._calKey(d);
+      const p = ["day", "week", "month", "year"].indexOf(period) >= 0 ? period : "month";
+      if (p === "day") {
+        return {
+          period: p,
+          from: k(a),
+          to: k(a),
+          label: `${a.getFullYear()}年${a.getMonth() + 1}月${a.getDate()}日`,
+        };
+      }
+      if (p === "week") {
+        const s = this._calTabWeekStartDate(a);
+        const e = new Date(s);
+        e.setDate(s.getDate() + 6);
+        return {
+          period: p,
+          from: k(s),
+          to: k(e),
+          label: `${s.getFullYear()}年${s.getMonth() + 1}月${s.getDate()}日 ~ ${
+            e.getMonth() + 1
+          }月${e.getDate()}日`,
+        };
+      }
+      if (p === "year") {
+        return {
+          period: p,
+          from: k(new Date(a.getFullYear(), 0, 1)),
+          to: k(new Date(a.getFullYear(), 11, 31)),
+          label: `${a.getFullYear()}年`,
+        };
+      }
+      return {
+        period: p,
+        from: k(new Date(a.getFullYear(), a.getMonth(), 1)),
+        to: k(new Date(a.getFullYear(), a.getMonth() + 1, 0)),
+        label: `${a.getFullYear()}年${a.getMonth() + 1}月`,
+      };
+    }
+
+    /* 卡上切周期：只换周期，锚点保持原样 ——
+       没定过就继续跟着工作台窗口（切周期不是「回到今天」，
+       而是「换一种粒度看同一段时间」）。 */
+    _boardCardSetPeriod(scope, period) {
+      if (["board", "day", "week", "month", "year"].indexOf(period) < 0) return;
+      this[`_calTabBoard${this._boardCardField(scope)}Period`] = period;
+      /* 时间轴是**单日**的读法：它没有「近一年」这一档，切到别的粒度时
+         顺手把它单独钉的那一天清掉，免得卡头写着 10 月、图还是 8 月那天。 */
+      if (scope === "tl") this._calTabBoardDay = null;
+    }
+
+    /* 把一张卡复位到**它自己的默认周期**（默认值见 BOARD_CARD_PERIOD_DEFAULT）。
+       卡片的「今」和顶栏的「今天」都走这里 —— 两处各写各的字面量时，
+       漏改一处就会留下"按了今天、卡还停在上个月"这种对不上的状态。 */
+    _boardCardReset(scope) {
+      const def = BOARD_CARD_PERIOD_DEFAULT[scope];
+      if (!def) return;
+      const field = this._boardCardField(scope);
+      this[`_calTabBoard${field}Period`] = def;
+      this[`_calTabBoard${field}Anchor`] = null;
+    }
+
+    /* 卡上翻页：按当前周期的步长挪这张卡自己的锚点。
+       「近一年」这一档挪的是**页面周期那个锚点**（与顶栏那颗按钮同一个状态），
+       其余四档挪卡片自己的锚点。都不越过今天 —— 未来没有数据可看。 */
+    _boardCardStep(scope, dir) {
+      const field = this._boardCardField(scope);
+      const period = this[`_calTabBoard${field}Period`] || "board";
+      if (period === "board") {
+        const base = new Date(
+          this._calTabStatsAnchor instanceof Date
+            ? this._calTabStatsAnchor
+            : new Date()
+        );
+        base.setDate(base.getDate() + (dir > 0 ? BOARD_STEP_DAYS : -BOARD_STEP_DAYS));
+        const limit = new Date();
+        limit.setHours(23, 59, 59, 999);
+        if (base.getTime() > limit.getTime()) base.setTime(limit.getTime());
+        this._calTabStatsAnchor = base;
+        return;
+      }
+      const raw = this[`_calTabBoard${field}Anchor`];
+      const base = raw instanceof Date ? raw : this._boardWindowEndDate();
+      const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      if (period === "day") d.setDate(d.getDate() + dir);
+      else if (period === "week") d.setDate(d.getDate() + 7 * dir);
+      else if (period === "year") d.setFullYear(d.getFullYear() + dir);
+      else d.setMonth(d.getMonth() + dir);
+      const now = new Date();
+      const limit = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      if (d.getTime() > limit.getTime()) d.setTime(limit.getTime());
+      this[`_calTabBoard${field}Anchor`] = d;
+    }
+
+    /* 卡头那行控件：周期 pill + 翻页 + 周期文字 + 合计 ——
+       与统计视图「时长统计」的区块头同一套读法（pill 用共用的
+       .north-caltab-segments 样式，26px 高、选中白底浮起）。
+       opts.pills 决定给哪几档（类型时间轴是单日的读法，只给日 / 周 / 月）；
+       opts.extra 是塞在周期文字后面的附加控件（时间轴那枚「回到今天」）。 */
+    _boardCardHead(scope, title, period, label, total, opts) {
+      const o = opts || {};
+      const names = { board: "近一年", day: "日", week: "周", month: "月", year: "年" };
+      const prevTips = {
+        board: "往前 30 天",
+        day: "前一天",
+        week: "上一周",
+        month: "上个月",
+        year: "上一年",
+      };
+      const nextTips = {
+        board: "往后 30 天",
+        day: "后一天",
+        week: "下一周",
+        month: "下个月",
+        year: "下一年",
+      };
+      const all = ["board", "day", "week", "month", "year"];
+      const pills = (Array.isArray(o.pills) ? o.pills : all).filter(
+        (p) => all.indexOf(p) >= 0
+      );
+      const cur = pills.indexOf(period) >= 0 ? period : pills[0];
+      return `<div class="north-caltab-board-cardhead north-caltab-board-cardhead-ctl">
+            <span class="north-caltab-board-cardtitle">${escapeHtml(title)}</span>
+            <div class="north-caltab-board-headctl">
+                <div class="north-caltab-segments north-caltab-board-periods">
+                    ${pills
+                      .map(
+                        (p) =>
+                          `<button class="${
+                            cur === p ? "active" : ""
+                          }" type="button" data-bcard-period="${scope}:${p}" data-tip="${
+                            p === "board" ? "工作台那段滚动的一年" : `按${names[p]}看`
+                          }">${names[p]}</button>`
+                      )
+                      .join("")}
+                </div>
+                <div class="north-caltab-board-nav">
+                    <button class="north-caltab-board-navbtn" type="button" data-bcard-nav="${scope}:prev" data-tip="${
+        prevTips[cur]
+      }"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconLeft"></use></svg></button>
+                    <span class="north-caltab-board-navlabel">${escapeHtml(
+                      label
+                    )}</span>
+                    <button class="north-caltab-board-navbtn" type="button" data-bcard-nav="${scope}:next" data-tip="${
+        nextTips[cur]
+      }"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><use xlink:href="#iconRight"></use></svg></button>
+                </div>
+                ${o.extra || ""}
+                ${total ? `<span class="north-caltab-board-total">${total}</span>` : ""}
+            </div>
+        </div>`;
     }
 
     /* 分桶键：日 = 日期；周 = 所在周的起始日（跟着设置里的「一周从周几开始」）；
@@ -5738,8 +6135,11 @@
     /* 翻页箭头的提示语：跟着视图走，周视图里说「上个月」就串了 */
     _calStepTip(view, dir) {
       const before = dir === "prev";
-      if (view === "stats") {
+      /* 工作台（合并后的总览段位）按「记录统计」那套周期翻，提示语跟着周期走。
+         日 / 周 / 月 / 年四档都要有说法 —— 少一档就会把「日」说成「上个月」。 */
+      if (view === "board") {
         const p = this._calTabStatsPeriod || "year";
+        if (p === "day") return before ? "前一天" : "后一天";
         if (p === "week") return before ? "上一周" : "下一周";
         if (p === "year") return before ? "上一年" : "下一年";
         return before ? "上个月" : "下个月";
@@ -5813,7 +6213,27 @@
       return h > 0 ? `${h}时${mm}分` : `${mm}分`;
     }
 
-    _buildCalendarStatsHtml() {
+    /* 分钟 → 紧凑时长（`4h31m` / `53m` / `2天3h`）。
+       工作台「类型」那张卡的时长汇总与坐标轴用这一款：一行一个数，比
+       「4时31分」短一截，横条后面才挂得下标签；超过一天改用「天 + 时」，
+       否则「一年窗口」会读出「812时30分」这种没人愿意数的数。
+       其余视图继续走 _fmtStatsDur —— 同一份分钟数，两种写法各自合适。 */
+    _fmtDurShort(min) {
+      const total = Math.max(0, Math.round(min || 0));
+      if (total < 60) return `${total}m`;
+      const h = Math.floor(total / 60);
+      const m = total % 60;
+      if (h < 24) return m ? `${h}h${m}m` : `${h}h`;
+      const d = Math.floor(h / 24);
+      const hh = h % 24;
+      return hh ? `${d}天${hh}h` : `${d}天`;
+    }
+
+    /* 「记录统计」那一整套区块：一次算完，把**每一块**交出去，由宿主自己拼顺序。
+       合并成一个工作台之后它只有工作台一个宿主了，但仍然拆开 ——
+       这些区块之间共享一大堆中间量（周期、锚点、dayCount、bars、trendPoints…），
+       拆成十几个独立方法只会让它们各自重算一遍；只把「怎么拼」交出去最省。 */
+    _buildStatsParts() {
       const period = this._calTabStatsPeriod || "year";
       const anchor =
         this._calTabStatsAnchor instanceof Date ? this._calTabStatsAnchor : new Date();
@@ -5941,8 +6361,10 @@
         )}" stroke="var(--b3-border-color)" stroke-dasharray="4 5" stroke-width="1" opacity="0.55"/>`;
         grid += `<text x="6" y="${(ty(v) - 5).toFixed(1)}" class="north-caltab-stats-axis-text">${v}</text>`;
       }
-      const pts = trendPoints.map((p, i) => tx(i).toFixed(1) + "," + ty(p.cnt).toFixed(1));
-      const linePath = "M" + pts.join(" L");
+      /* 与工作台那张「记录趋势」同一条曲线算法 —— 两处不要再各写一套折线 */
+      const linePath = this._smoothPath(
+        trendPoints.map((p, i) => ({ x: tx(i), y: ty(p.cnt) }))
+      );
       const areaPath =
         trendPoints.length > 1
           ? linePath + ` L${TW},${ty(0).toFixed(1)} L0,${ty(0).toFixed(1)} Z`
@@ -6237,80 +6659,11 @@
         )
         .join("");
 
-      /* ==================== 时长统计：各类型 × 日/周/月/年 ====================
-         独立于整页周期的局部周期（切换时锚点回到今天），翻页箭头只挪自己的锚点。
-         每个类型一行横向时长条：轨道按当期最长的类型归一，填充用类型自身配色。 */
-      if (!this._calTabDurPeriod) this._calTabDurPeriod = "month";
-      if (!(this._calTabDurAnchor instanceof Date)) this._calTabDurAnchor = new Date();
-      const durPeriod = this._calTabDurPeriod;
-      const durWindow = this._computeLifeLogDockPeriod(durPeriod, this._calTabDurAnchor);
-      const durStats = this._statsTypeDurations(
-        this._filterLifeLogDockByRange(
-          this._calTabFilteredRecords(),
-          durWindow.start,
-          durWindow.end
-        )
-      );
-      const durRows = Array.from(durStats.minutes.keys())
-        .map((name) => ({
-          name,
-          min: durStats.minutes.get(name) || 0,
-          color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
-        }))
-        .sort((a, b) => b.min - a.min);
-      const durTotalMin = durRows.reduce((s, r) => s + r.min, 0);
-      const durMax = Math.max(1, ...durRows.map((r) => r.min));
-      /* 名称列宽按当期最长的类型名自适应（中文按全宽、拉丁按 0.55 估），
-         列宽刚好贴住最长的名字，左侧不会再空出一大片 */
-      const nameUnits = Math.max(
-        1,
-        ...durRows.map((t) =>
-          [...t.name].reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 1 : 0.55), 0)
-        )
-      );
-      const durNameW = Math.ceil(nameUnits * 13) + 4;
-      const durBars = durRows
-        .map((t) => {
-          const pct = Math.round((t.min / durMax) * 100);
-          return `<div class="north-caltab-stats-durrow" data-tip="${escapeHtml(
-            `${t.name} · ${this._fmtStatsDur(t.min)}`
-          )}">
-                <span class="north-caltab-stats-durname">${escapeHtml(t.name)}</span>
-                <div class="north-caltab-stats-durtrack"><i class="north-caltab-stats-durfill" style="width:${pct}%;background:${t.color}"></i></div>
-                <span class="north-caltab-stats-durval">${this._fmtStatsDur(t.min)}</span>
-            </div>`;
-        })
-        .join("");
-      const durPeriodNames = { day: "日", week: "周", month: "月", year: "年" };
-      const durPrevTips = { day: "前一天", week: "上一周", month: "上个月", year: "上一年" };
-      const durNextTips = { day: "后一天", week: "下一周", month: "下个月", year: "下一年" };
-      /* 区块头一行装下：左「时长统计」，右侧依次为周期 pill、翻页、周期文字与合计 */
-      const durSection = `<div class="north-caltab-stats-section">
-            <div class="north-caltab-stats-header north-caltab-stats-header-dur">
-                <span>时长统计</span>
-                <div class="north-caltab-stats-durhead">
-                    <div class="north-caltab-segments north-caltab-stats-durperiods">
-                        ${["day", "week", "month", "year"]
-                          .map(
-                            (p) =>
-                              `<button class="${durPeriod === p ? "active" : ""}" data-caltab-durperiod="${p}">${durPeriodNames[p]}</button>`
-                          )
-                          .join("")}
-                    </div>
-                    <div class="north-caltab-stats-durnav">
-                        <button class="north-caltab-stats-durnavbtn" data-caltab-durnav="prev" data-tip="${durPrevTips[durPeriod]}"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconLeft"></use></svg></button>
-                        <span class="north-caltab-stats-durlabel">${durWindow.label}</span>
-                        <button class="north-caltab-stats-durnavbtn" data-caltab-durnav="next" data-tip="${durNextTips[durPeriod]}"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><use xlink:href="#iconRight"></use></svg></button>
-                    </div>
-                    <span class="north-caltab-stats-sub">合计 ${this._fmtStatsDur(durTotalMin)}</span>
-                </div>
-            </div>
-            ${
-              durRows.length
-                ? `<div class="north-caltab-stats-durlist" style="--dur-namew:${durNameW}px">${durBars}</div>`
-                : `<div class="north-caltab-stats-empty">这段周期还没有可统计时长的记录</div>`
-            }
-        </div>`;
+      /* 「时长统计」这一段**不在这里出**：工作台原本就有一张「类型时长汇总」，
+         两张说的是同一件事（各类型累计多久）。合并时只留工作台那张 —— 它多一档
+         「近一年」（正好等于页面那段滚动一年），跟着顶栏翻页一起动；
+         而这里这张用的是自己独立的锚点，合并后会与顶栏脱节。
+         所以时长口径的渲染统一在 _buildHabitBoardHtml 那一侧。 */
 
       /* ==================== 类型分布：环形图 + 芯片图例（自配周期） ====================
          与「时长统计」同款局部周期（日 / 周 / 月 / 年，切换时锚点回到今天，
@@ -6413,19 +6766,23 @@
             }
         </div>`;
 
-      /* ==================== 拼装 ====================
-         顶栏（周期 pill + 周期文字）暂不渲染：与工具栏左上的日期显示重复，
-         那个位置留给后续规划；周期本身仍由「今天 / 翻页箭头」按当前周期走。 */
-      return `<div class="north-caltab-stats">
-            <div class="north-caltab-stats-grid">${cards}</div>
-            ${heatSection}
-            ${dailySection}
-            ${section(distTitle, `共 ${totalCount} ${unit}`, `<div class="north-caltab-stats-bars${distMods}">${barsHtml}</div>`)}
-            ${detailSection}
-            ${section("每日走势", trendSub, trendBody)}
-            ${durSection}
-            ${typeSection}
-        </div>`;
+      /* ==================== 交付各区块 ====================
+         每块都是**自成一体的 HTML 片段**，宿主直接铺进页面即可（顺序由宿主定）。
+         周期不由这里出：顶栏的「今天 / 翻页箭头」按 _calTabStatsPeriod 挪锚点，
+         块内另有各自的小周期 pill（时长统计 / 类型分布）。 */
+      return {
+        cards: `<div class="north-caltab-stats-grid">${cards}</div>`,
+        heatSection,
+        dailySection,
+        distSection: section(
+          distTitle,
+          `共 ${totalCount} ${unit}`,
+          `<div class="north-caltab-stats-bars${distMods}">${barsHtml}</div>`
+        ),
+        detailSection,
+        trendSection: section("每日走势", trendSub, trendBody),
+        typeSection,
+      };
     }
     /* 时间轴视图（周 / 三日 / 日）摆块的三步走：
        ① _parseCalTimelineRecords —— 解析、排序，并按当前时间计算模式算出真实起止；
@@ -7245,6 +7602,20 @@
       const pick = HABIT_NUM_PICKS.some((o) => o.value === raw.pick)
         ? raw.pick
         : "sum";
+      /* 前置习惯：数组（习惯关系图用，见「习惯关系图」那一节）。
+         老配置没有这个键 → 空数组，零迁移。这里只做粗筛（去空、去重、去掉自己），
+         真正「只认还在追踪的习惯」在 _habitPreList 里做 —— 那张名单会变。 */
+      const preSeen = new Set();
+      const pre = [];
+      (Array.isArray(raw.pre) ? raw.pre : []).forEach((n) => {
+        const name = String(n == null ? "" : n).trim();
+        if (!name || name === type || preSeen.has(name)) return;
+        preSeen.add(name);
+        pre.push(name);
+      });
+      /* 维持成本档（国策框架）：只认那四个值，没标 / 值不认识一律当「没标」。
+         老配置没有这个键 → 空串，图上不画竖条、不影响任何判断（零迁移）。 */
+      const cost = HABIT_COSTS.some((o) => o.value === raw.cost) ? raw.cost : "";
 
       return {
         unit,
@@ -7261,6 +7632,8 @@
         exclude,
         num,
         pick,
+        pre,
+        cost,
       };
     }
 
@@ -7298,6 +7671,14 @@
         exclude: String(cfg.exclude == null ? "" : cfg.exclude).trim(),
         num: cfg.num === true || cfg.num === "true",
         pick: HABIT_NUM_PICKS.some((o) => o.value === cfg.pick) ? cfg.pick : "sum",
+        /* 前置习惯（习惯关系图）：存名字数组，去空去重去自己。
+           指向没在追踪的习惯时读的时候会被 _habitPreList 滤掉，
+           所以这里不做「必须在 habitTypes 里」的校验 —— 那个名单随时会变。 */
+        pre: (Array.isArray(cfg.pre) ? cfg.pre : [])
+          .map((n) => String(n == null ? "" : n).trim())
+          .filter((n, i, arr) => n && n !== type && arr.indexOf(n) === i),
+        /* 维持成本档（国策框架）：只存那四个值，没标就是空串 */
+        cost: HABIT_COSTS.some((o) => o.value === cfg.cost) ? cfg.cost : "",
       };
       this.data.habitConfig = all;
       this._persist("保存习惯目标");
@@ -7524,6 +7905,613 @@
       } else all[type] = { preset };
       this.data.habitViews = all;
       this._persist("保存习惯查看窗口");
+    }
+
+    /* ============ 习惯关系图（前置习惯）============
+       需求：一个习惯总也养不成的时候，别硬啃 —— 往回找它的**前置习惯**，
+       先做阻力最小的那一步，目标习惯才立得住。
+
+       数据存在 habitConfig[type].pre（前置习惯名数组），与其它习惯配置一起落盘；
+       只认**还在追踪的**习惯（habitTypes）—— 一条指向没在追踪的习惯的连线，
+       在图上是个既点不开也配不了的幽灵节点，读的时候直接滤掉。
+
+       图按前置链**分列**：没有前置的在最左（0 列），其余按「前置里最深的那个 + 1」
+       落列，所以箭头永远从左指向右，读起来就是「先把左边做起来，右边才立得住」。
+
+       图上再叠一层**链路状态**（只用真实数据，不加锁、不隐藏任何节点）：
+       节点三态 —— 达标（照常）／未达标（中性灰，是「事实」不是「惩罚」）／
+       还没轮到（最淡一档：前置一个都没达标，或开始日期还没到）；
+       边三态 —— 通（前置达标、目标也达标）／弱（前置达标但目标没跟上，实线更淡，
+       代表「这一步没接上」）／断（前置自己没达标，灰虚线，代表「链条还没走到这」）。
+       再顺着链找第一个「前置达标、目标没跟上」的节点，挂一枚「当前卡点」——
+       它和「建议起点」正好配成一对：一个说从哪起步，一个说现在堵在哪。
+
+       另外还有**维持成本档**（见 HABIT_COSTS）：状态说的是「做没做到」（事实），
+       成本档说的是「这一步靠什么撑着」（设定）。它只管两件事 —— 卡片左边那根竖条
+       画不画（没标就不画），以及「建议起点」先挑成本低的（胜于易胜）。
+       之所以要这一维：前置很容易变成「拿一个要意志力的习惯，去撑另一个要意志力的
+       习惯」，那种链看着长、其实很脆 —— 竖条就是让「哪一环是硬支撑」一眼可见。
+
+       节点是绝对定位的卡片、连线是铺在下面的一层 SVG：卡片等宽等高、列距固定，
+       所以连线不用测 DOM 就能算准，重绘成本几乎为零（几十张卡也只是几十个 div）。 */
+
+    /* 某个习惯的「前置习惯」名单：只认还在追踪的习惯，顺手去掉自己与重复项 */
+    _habitPreList(type) {
+      const cfg = this.data.habitConfig && this.data.habitConfig[type];
+      const raw = cfg && Array.isArray(cfg.pre) ? cfg.pre : [];
+      const all = this._habitTypes();
+      const seen = new Set();
+      const list = [];
+      raw.forEach((n) => {
+        const name = String(n == null ? "" : n).trim();
+        if (!name || name === type || seen.has(name)) return;
+        if (all.indexOf(name) < 0) return;
+        seen.add(name);
+        list.push(name);
+      });
+      return list;
+    }
+
+    /* 反向：谁把 type 当前置习惯（同样只认还在追踪的习惯） */
+    _habitPostList(type) {
+      return this._habitTypes().filter(
+        (t) => t !== type && this._habitPreList(t).indexOf(type) >= 0
+      );
+    }
+
+    /* 从 from 顺着「下游」（谁把我当前置）能不能走到 to。
+       加关系前用它挡环 —— 环会让分列算法失效，图会缩成一团，也读不出先后。 */
+    _habitReaches(from, to) {
+      const seen = new Set([from]);
+      const stack = [from];
+      while (stack.length) {
+        const cur = stack.pop();
+        const next = this._habitPostList(cur);
+        for (let i = 0; i < next.length; i++) {
+          const n = next[i];
+          if (n === to) return true;
+          if (!seen.has(n)) {
+            seen.add(n);
+            stack.push(n);
+          }
+        }
+      }
+      return false;
+    }
+
+    /* 写回某个习惯的前置名单（走 _habitSetConfig，与其它习惯配置一起落盘） */
+    _habitSetPre(type, list) {
+      const all = this._habitTypes();
+      const seen = new Set();
+      const next = [];
+      (Array.isArray(list) ? list : []).forEach((n) => {
+        const name = String(n == null ? "" : n).trim();
+        if (!name || name === type || seen.has(name)) return;
+        if (all.indexOf(name) < 0) return;
+        seen.add(name);
+        next.push(name);
+      });
+      const cfg = this._habitConfig(type);
+      cfg.pre = next;
+      this._habitSetConfig(type, cfg);
+    }
+
+    /* 加 / 删一条前置关系。返回 "added" / "removed" / "cycle" / "self" ——
+       调用方据此给提示（只有「会绕回自己」需要跟用户解释一句）。 */
+    _habitTogglePre(type, cand) {
+      if (!type || !cand || type === cand) return "self";
+      const cur = this._habitPreList(type);
+      const at = cur.indexOf(cand);
+      if (at >= 0) {
+        this._habitSetPre(
+          type,
+          cur.filter((n) => n !== cand)
+        );
+        return "removed";
+      }
+      if (this._habitReaches(type, cand)) return "cycle";
+      this._habitSetPre(type, cur.concat(cand));
+      return "added";
+    }
+
+    /* 近 30 天的完成率（%）—— 口径完全交给 _habitPeriodStats：
+       日目标按天结算、周 / 月目标按完整周期结算，坏习惯也算得对。
+       窗口跨年时用 _habitRangeData 把两年合起来，与卡片上的「本期成绩」同源。 */
+    _habitRate30(type) {
+      const cfg = this._habitConfig(type);
+      const now = new Date();
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const start = new Date(end);
+      start.setDate(start.getDate() - 29);
+      const { days } = this._habitRangeData(type, { start, end });
+      const s = this._habitPeriodStats(days, cfg, start, 30, now);
+      return s && s.rate != null ? s.rate : null;
+    }
+
+    /* 这个习惯**当前这一期**达标了吗（日目标看今天、周目标看本周、月目标看本月）。
+       关系图的「链路状态」用它当唯一判据 —— 与习惯页顶部那句
+       「今日完成 / 本期达成」完全同一个口径，不给图另算一套。
+       注意这里**不看**「查看窗口」：那枚胶囊管的是卡片上画哪一段日子，
+       跟「这一期到底做没做到」是两件事。 */
+    _habitAchievedNow(type) {
+      const cfg = this._habitConfig(type);
+      const now = new Date();
+      const year = now.getFullYear();
+      const { days } = this._habitYearData(type, year);
+      if (cfg.period === "day") {
+        return this._habitPeriodAchieved(
+          cfg,
+          this._habitDayValue(days, this._calKey(now), cfg)
+        );
+      }
+      if (cfg.period === "week") {
+        return this._habitPeriodAchieved(
+          cfg,
+          this._habitPeriodSum(days, cfg, this._calTabWeekStartDate(now), 7)
+        );
+      }
+      return this._habitPeriodAchieved(
+        cfg,
+        this._habitPeriodSum(
+          days,
+          cfg,
+          new Date(year, now.getMonth(), 1),
+          new Date(year, now.getMonth() + 1, 0).getDate()
+        )
+      );
+    }
+
+    /* 关系图分列：layer(n) = 前置链上离「起点」有多远（没有前置 = 第 0 列）。
+       列内顺序先按习惯配置顺序铺，再按「前置们的平均行号」微调两轮 ——
+       连线交叉会明显少一些，而且顺序是确定的（同一份数据每次画出来一样）。 */
+    _habitChainLayout(nodes, preOf) {
+      const order = new Map(nodes.map((n, i) => [n, i]));
+      const layerOf = new Map();
+      const calc = (n, stack) => {
+        if (layerOf.has(n)) return layerOf.get(n);
+        /* 兜底：数据里万一有环（手工改过配置文件），别在这里转死 */
+        if (stack.has(n)) return 0;
+        stack.add(n);
+        let best = 0;
+        preOf(n).forEach((p) => {
+          if (!order.has(p)) return;
+          best = Math.max(best, calc(p, stack) + 1);
+        });
+        stack.delete(n);
+        layerOf.set(n, best);
+        return best;
+      };
+      nodes.forEach((n) => calc(n, new Set()));
+      const maxL = nodes.reduce((m, n) => Math.max(m, layerOf.get(n) || 0), 0);
+      const cols = [];
+      for (let i = 0; i <= maxL; i++) cols.push([]);
+      nodes.forEach((n) => cols[layerOf.get(n) || 0].push(n));
+      const rowOf = new Map();
+      const settle = () =>
+        cols.forEach((col) => col.forEach((n, i) => rowOf.set(n, i)));
+      settle();
+      for (let pass = 0; pass < 2; pass++) {
+        for (let li = 1; li < cols.length; li++) {
+          const bary = new Map();
+          cols[li].forEach((n) => {
+            const ps = preOf(n).filter((p) => rowOf.has(p));
+            const v = ps.length
+              ? ps.reduce((s, p) => s + rowOf.get(p), 0) / ps.length
+              : rowOf.get(n) || 0;
+            bary.set(n, v);
+          });
+          cols[li].sort(
+            (a, b) => bary.get(a) - bary.get(b) || order.get(a) - order.get(b)
+          );
+          settle();
+        }
+      }
+      return { layerOf, cols };
+    }
+
+    /* 关系图这一块是否展开（默认展开；用户收起来才落盘 false） */
+    _habitChainOpen() {
+      return !(this.data && this.data.habitChainOpen === false);
+    }
+
+    /* 习惯视图里那一整块「前置习惯」关系图。 */
+    _habitChainSectionHtml() {
+      const types = this._habitTypes();
+      if (!types.length) return "";
+      const sicon = (id) =>
+        `<svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#${id}"></use></svg>`;
+      const open = this._habitChainOpen();
+      const edit = !!this._calTabChainEdit;
+      const pick = types.indexOf(this._calTabChainPick) >= 0 ? this._calTabChainPick : "";
+      const preOf = (t) => this._habitPreList(t);
+      let edgeCount = 0;
+      types.forEach((t) => {
+        edgeCount += preOf(t).length;
+      });
+      const nameOf = (t) => {
+        const cfg = this._habitConfig(t);
+        return cfg.alias || t;
+      };
+      const colorOf = (t) => this._colorOf(t) || DEFAULT_TYPE_COLOR;
+
+      /* 只有一个习惯时连不成关系（自己不能当前置）：给一句说明就收工 */
+      if (types.length < 2) {
+        return `<div class="north-caltab-chain">
+                <div class="north-caltab-chain-head">
+                    <span class="north-caltab-chain-title">${sicon(
+                      "iconGraph"
+                    )}前置习惯</span>
+                    <span class="north-caltab-chain-sub">至少两个习惯才能连成关系</span>
+                </div>
+                <div class="north-caltab-chain-note">关系图至少要两个习惯：一个总也养不成的目标习惯，加几个能替它开路的「前置习惯」。去「设置 → 习惯设置」里再挑一个类型吧。</div>
+            </div>`;
+      }
+
+      const head = `<div class="north-caltab-chain-head">
+            <button type="button" class="north-caltab-chain-toggle" data-caltab-chaintoggle data-tip="${
+              open ? "收起" : "展开"
+            }">${CHAIN_CHEV_SVG}</button>
+            <span class="north-caltab-chain-title">${sicon("iconGraph")}前置习惯</span>
+            <span class="north-caltab-chain-sub">${
+              edgeCount
+                ? `${types.length} 个习惯 · ${edgeCount} 条前置关系`
+                : "还没有设置前置关系"
+            }</span>
+            <button type="button" class="north-caltab-chain-btn${
+              edit ? " on" : ""
+            }" data-caltab-chainedit>${edit ? "完成编辑" : "编辑关系"}</button>
+        </div>`;
+
+      if (!open) {
+        return `<div class="north-caltab-chain is-closed">${head}</div>`;
+      }
+
+      /* —— 编辑面板：先点一张卡选中它，再点其它习惯把「前置」开关打开 / 关掉。
+         会绕回自己的那条直接禁用 —— 用户点上去什么也不会发生，比弹一句
+         「不能成环」更好懂。 —— */
+      let panel = "";
+      if (edit) {
+        if (!pick) {
+          panel = `<div class="north-caltab-chain-panel">
+                    <span class="north-caltab-chain-plabel">编辑关系</span>
+                    <span class="north-caltab-chain-pnote">点下面任意一张习惯卡，给它挑前置习惯 —— 先做哪个，这个才立得住。</span>
+                </div>`;
+        } else {
+          const cur = preOf(pick);
+          const chips = types
+            .filter((t) => t !== pick)
+            .map((t) => {
+              const on = cur.indexOf(t) >= 0;
+              const cyc = !on && this._habitReaches(pick, t);
+              return `<button type="button" class="north-caltab-chain-chip${
+                on ? " on" : ""
+              }${cyc ? " is-cycle" : ""}" style="--tt-c:${escapeHtml(
+                colorOf(t)
+              )}" data-caltab-chaintarget="${escapeHtml(
+                pick
+              )}" data-caltab-chaincand="${escapeHtml(t)}"${
+                cyc ? ` data-tip="选它会让关系绕回自己"` : ""
+              }><i></i>${escapeHtml(nameOf(t))}</button>`;
+            })
+            .join("");
+          panel = `<div class="north-caltab-chain-panel">
+                    <span class="north-caltab-chain-plabel">给「${escapeHtml(
+                      nameOf(pick)
+                    )}」挑前置习惯</span>
+                    <span class="north-caltab-chain-pchips">${chips}</span>
+                    ${
+                      cur.length
+                        ? `<button type="button" class="north-caltab-chain-pclear" data-caltab-chainclear="${escapeHtml(
+                            pick
+                          )}">清空</button>`
+                        : ""
+                    }
+                    <span class="north-caltab-chain-pnote">选中的就是它的前置 —— 箭头从前置指向它。绕回自己的那条会自动禁用。</span>
+                </div>`;
+        }
+      }
+
+      /* —— 分列 + 定位 —— */
+      const { layerOf, cols } = this._habitChainLayout(types, preOf);
+      const colCount = cols.length;
+      const rowCount = cols.reduce((m, c) => Math.max(m, c.length), 1);
+      /* 跨列的连线（前置在很左、目标在很右）走顶部那条「走廊」，
+         免得横穿中间那些卡片。走廊每条占一个 9px 的档位。 */
+      let edgeCountLong = 0;
+      types.forEach((t) =>
+        preOf(t).forEach((p) => {
+          if ((layerOf.get(t) || 0) - (layerOf.get(p) || 0) > 1) edgeCountLong += 1;
+        })
+      );
+      const padX = 3;
+      /* 跨列连线走顶部走廊：每条占一个 10px 的档位，走廊与第一行卡片之间
+         再留 8px —— 挨太近看着像压着卡片 */
+      const padTop = edgeCountLong ? 12 + edgeCountLong * 10 : 4;
+      const padBottom = 4;
+      const width =
+        padX + colCount * CHAIN_CARD_W + (colCount - 1) * CHAIN_COL_GAP + padX;
+      const height =
+        padTop +
+        rowCount * CHAIN_CARD_H +
+        (rowCount - 1) * CHAIN_ROW_GAP +
+        padBottom;
+      const pos = new Map();
+      cols.forEach((col, li) => {
+        col.forEach((t, ri) => {
+          pos.set(t, {
+            x: padX + li * (CHAIN_CARD_W + CHAIN_COL_GAP),
+            y: padTop + ri * (CHAIN_CARD_H + CHAIN_ROW_GAP),
+          });
+        });
+      });
+
+      /* —— 链路状态 · 节点三态 ——
+         只看**真实发生过的事**（_habitAchievedNow，与习惯页顶部「今日完成 /
+         本期达成」同一个口径），不给「达标与否」另造一套算法。
+         这里只叠一层状态：不加锁、不隐藏、不把你明明做到了的习惯压暗 ——
+         未达标是灰色的**事实**，「还没轮到」才是「先别管这个」。 */
+      const todayKey = this._calKey(new Date());
+      const achieved = new Map();
+      types.forEach((t) => achieved.set(t, this._habitAchievedNow(t)));
+
+      /* —— 链路状态 · 维持成本档 ——
+         状态说的是**事实**（做没做到），成本档说的是**设定**（这一步靠什么撑着），
+         两件事各归各位：成本档不参与节点 / 边的状态判断，只管两件事 ——
+         卡片左边画不画那根竖条、以及「建议起点」挑谁。
+         一个都没标时 costMarked = 0：不画条、底部不多那句话、
+         起点排序也退化成原来的纯完成率排序（零迁移）。 */
+      const costOf = new Map();
+      let costMarked = 0;
+      types.forEach((t) => {
+        const c = this._habitConfig(t).cost || "";
+        costOf.set(t, c);
+        if (c) costMarked += 1;
+      });
+
+      const nodeState = new Map();
+      types.forEach((t) => {
+        const cfg = this._habitConfig(t);
+        /* 开始日期还没到：它自己都还没轮到 */
+        if (this._habitOffState(cfg, todayKey) < 0) {
+          nodeState.set(t, "wait");
+          return;
+        }
+        if (achieved.get(t)) {
+          nodeState.set(t, "ok");
+          return;
+        }
+        /* 前置**一个都没**达标 = 链条还没走到这，暂不判它「未达标」 */
+        const pres = preOf(t).filter((p) => pos.has(p));
+        if (pres.length && pres.every((p) => !achieved.get(p))) {
+          nodeState.set(t, "wait");
+          return;
+        }
+        nodeState.set(t, "miss");
+      });
+      /* 边的三态：通（前置达标、目标也达标）／弱（前置达标但目标没跟上，
+         代表「这一步没接上」）／断（前置自己没达标，代表「链条还没走到这」） */
+      const edgeState = (p, t) =>
+        !achieved.get(p) ? "cut" : achieved.get(t) ? "ok" : "weak";
+      /* 当前卡点：顺着链往下走，第一个「前置达标、目标没跟上」的节点。
+         层号小的先算（就是链条靠前的那些），同层按习惯配置顺序取头一个 ——
+         只挂一枚：它才是现在真正该啃的那一步。 */
+      let blockAt = "";
+      types
+        .map((t, i) => ({ t, i, layer: layerOf.get(t) || 0 }))
+        .sort((a, b) => a.layer - b.layer || a.i - b.i)
+        .some((o) => {
+          const t = o.t;
+          if (achieved.get(t) || nodeState.get(t) !== "miss") return false;
+          if (!preOf(t).some((p) => pos.has(p) && achieved.get(p))) return false;
+          blockAt = t;
+          return true;
+        });
+
+      /* 起点列里最好啃的那个 = 建议起点（阻力最小的一步）。
+         只有一个起点时不标 —— 「起点」本身就是它，再挂一枚「建议」是废话。
+         「还没轮到」的不参选：推荐一个前置都还没通的东西，正好跟这张图
+         「先做阻力最小的那一步」的意思反着来。
+
+         排序是「胜于易胜」：**先挑维持成本低的**（机制 / 被动 / 半被动 —— 设一次
+         就不用管的那种），同档再比近 30 天完成率。理由：完成率高只说明这段日子
+         你扛住了；成本低才说明这一步不靠意志力，往后也不太会崩。一个都没标成本档时
+         这一层全部相等，就退化成原来的纯完成率排序。 */
+      const roots = cols[0] || [];
+      const rate30 = new Map();
+      types.forEach((t) => rate30.set(t, this._habitRate30(t)));
+      let bestRoot = "";
+      if (roots.length > 1) {
+        roots.forEach((t) => {
+          if (nodeState.get(t) === "wait") return;
+          const r = rate30.get(t);
+          if (r == null) return;
+          if (!bestRoot) {
+            bestRoot = t;
+            return;
+          }
+          const tl = HABIT_COST_LOW[costOf.get(t)] ? 1 : 0;
+          const bl = HABIT_COST_LOW[costOf.get(bestRoot)] ? 1 : 0;
+          if (tl > bl || (tl === bl && r > rate30.get(bestRoot))) bestRoot = t;
+        });
+      }
+
+      /* —— 连线层 —— */
+      const R = 9;
+      const corridorY = (lane) => 4 + lane * 10;
+      /* 一张卡上可能挂着好几条边（「早睡」既靠喝水也靠冥想）。都落在
+         左边中点的话箭头会叠成一个疙瘩，所以沿卡片边缘**错开**：
+         左右各留 14px 余量，再按条数均分。 */
+      const SPREAD = 14;
+      const spreadY = (card, i, n) => {
+        const c = card.y + CHAIN_CARD_H / 2;
+        if (n <= 1) return c;
+        const step = Math.min(13, (SPREAD * 2) / (n - 1));
+        return c + (i - (n - 1) / 2) * step;
+      };
+      /* 先算出「谁连谁」，顺便给每条边排好两头的序号 —— 画线时才知道错开多少 */
+      const edges = [];
+      const inIdx = new Map();
+      const outIdx = new Map();
+      types.forEach((t) => {
+        const list = preOf(t).filter((p) => pos.has(p));
+        inIdx.set(t, list);
+        list.forEach((p) => {
+          if (!outIdx.has(p)) outIdx.set(p, []);
+          outIdx.get(p).push(t);
+        });
+      });
+      types.forEach((t) => {
+        const b = pos.get(t);
+        if (!b) return;
+        const ins = inIdx.get(t) || [];
+        ins.forEach((p, i) => {
+          edges.push({
+            from: p,
+            to: t,
+            inI: i,
+            inN: ins.length,
+            outI: (outIdx.get(p) || []).indexOf(t),
+            outN: (outIdx.get(p) || []).length,
+            far: (layerOf.get(t) || 0) - (layerOf.get(p) || 0) > 1,
+            /* 这条边通没通：画线时按它换样式 */
+            state: edgeState(p, t),
+          });
+        });
+      });
+      const pathOf = (a, b, lane, y1, y2) => {
+        const x1 = a.x + CHAIN_CARD_W;
+        const x2 = b.x;
+        /* 箭头本身占 6px，线画到箭头根部就收，别从箭尖里穿出来 */
+        const ax = x2 - 6;
+        if (!lane && (layerOf.get(b.type) || 0) - (layerOf.get(a.type) || 0) <= 1) {
+          if (Math.abs(y2 - y1) < R * 2) return `M ${x1} ${y1} H ${ax}`;
+          const xm = x1 + (x2 - x1) / 2;
+          const dir = y2 > y1 ? 1 : -1;
+          return `M ${x1} ${y1} H ${xm - R} Q ${xm} ${y1} ${xm} ${
+            y1 + dir * R
+          } V ${y2 - dir * R} Q ${xm} ${y2} ${xm + R} ${y2} H ${ax}`;
+        }
+        const cy = corridorY(lane);
+        const xm1 = x1 + CHAIN_COL_GAP / 2;
+        const xm2 = x2 - CHAIN_COL_GAP / 2;
+        return `M ${x1} ${y1} H ${xm1 - R} Q ${xm1} ${y1} ${xm1} ${
+          y1 - R
+        } V ${cy + R} Q ${xm1} ${cy} ${xm1 + R} ${cy} H ${
+          xm2 - R
+        } Q ${xm2} ${cy} ${xm2} ${cy + R} V ${y2 - R} Q ${xm2} ${y2} ${
+          xm2 + R
+        } ${y2} H ${ax}`;
+      };
+      let lane = 1;
+      let paths = "";
+      edges.forEach((e) => {
+        const a = pos.get(e.from);
+        const b = pos.get(e.to);
+        if (!a || !b) return;
+        const y1 = spreadY(a, e.outI, e.outN);
+        const y2 = spreadY(b, e.inI, e.inN);
+        const d = pathOf(
+          { ...a, type: e.from },
+          { ...b, type: e.to },
+          e.far ? lane++ : 0,
+          y1,
+          y2
+        );
+        const c = colorOf(e.from);
+        /* 边按状态换样式：通了的照常上类型色，没接上的淡下去，断了的走灰虚线 */
+        const sc =
+          e.state === "cut" ? " is-cut" : e.state === "weak" ? " is-weak" : "";
+        paths += `<path class="north-caltab-chain-line${sc}" style="--tt-c:${escapeHtml(
+          c
+        )}" d="${d}"/><path class="north-caltab-chain-arrow${sc}" style="--tt-c:${escapeHtml(
+          c
+        )}" d="M ${b.x - 6} ${y2 - 3.6} L ${b.x - 0.5} ${y2} L ${
+          b.x - 6
+        } ${y2 + 3.6} Z"/>`;
+      });
+
+      /* —— 卡片层 —— */
+      const cards = types
+        .map((t) => {
+          const p = pos.get(t);
+          if (!p) return "";
+          const cfg = this._habitConfig(t);
+          const label = nameOf(t);
+          const color = colorOf(t);
+          const { days } = this._habitYearData(t, new Date().getFullYear());
+          const streak = this._habitStreak(days, new Date().getFullYear(), cfg);
+          const r = rate30.get(t);
+          const isRoot = (layerOf.get(t) || 0) === 0;
+          const isBest = t === bestRoot;
+          const isBlock = t === blockAt;
+          const ns = nodeState.get(t) || "miss";
+          /* 徽标位只挂一个角色：「当前卡点」比「起点 / 建议起点」更该被看见 */
+          const badge = isBlock
+            ? `<span class="north-caltab-chain-badge is-block">当前卡点</span>`
+            : isBest
+              ? `<span class="north-caltab-chain-badge is-best">建议起点</span>`
+              : isRoot
+                ? `<span class="north-caltab-chain-badge">起点</span>`
+                : "";
+          const nsText =
+            ns === "ok" ? "本期已达标" : ns === "wait" ? "还没轮到" : "本期未达标";
+          /* 维持成本档：卡片左边那根竖条。没标注的不画 —— 竖条只是「设定」，
+             和上面那串数字（事实）分开说，所以挂在 tooltip 最后 */
+          const cost = costOf.get(t);
+          const tip = `${label} · ${habitGoalText(cfg)} · 连续 ${streak.n} ${
+            streak.unit
+          }${r == null ? "" : ` · 近 30 天 ${r}%`} · ${nsText}${
+            cost ? ` · 维持成本：${HABIT_COST_LABEL[cost]}` : ""
+          }`;
+          return `<div class="north-caltab-chain-card is-${ns}${
+            cost ? ` is-cost-${HABIT_COST_LEVEL[cost]}` : ""
+          }${pick === t ? " is-pick" : ""}${isBest ? " is-best" : ""}${
+            isBlock ? " is-block" : ""
+          }" style="left:${
+            p.x
+          }px;top:${p.y}px;--tt-c:${escapeHtml(
+            color
+          )}" data-caltab-chainpick="${escapeHtml(t)}" data-tip="${escapeHtml(
+            tip
+          )}">
+                <div class="north-caltab-chain-chead">
+                    <span class="north-caltab-chain-cname">${escapeHtml(label)}</span>
+                    ${badge}
+                </div>
+                <div class="north-caltab-chain-cmeta"><span>连续 <b>${
+                  streak.n
+                }</b> ${streak.unit}</span><span>近 30 天 <b>${
+                  r == null ? "—" : r + "%"
+                }</b></span></div>
+                <div class="north-caltab-chain-cgoal">${escapeHtml(
+                  habitGoalText(cfg)
+                )}</div>
+            </div>`;
+        })
+        .join("");
+
+      return `<div class="north-caltab-chain${edit ? " is-edit" : ""}">
+            ${head}
+            ${panel}
+            <div class="north-caltab-chain-canvas">
+                <div class="north-caltab-chain-stage" style="width:${width}px;height:${height}px">
+                    <svg class="north-caltab-chain-lines" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${paths}</svg>
+                    ${cards}
+                </div>
+            </div>
+            ${
+              edgeCount
+                ? `<div class="north-caltab-chain-foot">从左往右读：左边是前置，右边是它撑起来的目标。卡片灰一点 = 这期还没达标，最淡的 = 前置还没通、还没轮到它。<br>实线 = 这一环接上了（越淡 = 目标还没跟上），灰虚线 = 前置自己没达标、链条还没走到这。「建议起点」是起点里阻力最小的那个 —— 先啃它；「当前卡点」是顺着链第一个接不上的地方 —— 现在就堵在这。</div>`
+                : `<div class="north-caltab-chain-note">点右上角「编辑关系」，先给一个总也养不成的习惯挑几个前置习惯。箭头从左指向右：左边先立住，右边才立得住。</div>`
+            }
+            ${
+              /* 成本档那根竖条的解释只在**真有人标注**时才出现：
+                 没标注的人不该被一段用不上的说明打扰（告示牌原则） */
+              edgeCount && costMarked
+                ? `<div class="north-caltab-chain-foot">卡片左边那根竖条 = 这一步的维持成本：绿 = 机制 / 被动（设一次就不用管），青 = 半被动（挂在几乎必然发生的触发上），灰 = 主动（每次都要自己扛）—— 没标的不画。「建议起点」优先挑成本低的那几个：先用省力的一步把链撑住，比先啃最难的划算。</div>`
+                : ""
+            }
+        </div>`;
     }
 
     /* 某习惯在指定窗口里的每日表现：跨年窗口把涉及的那几年数据合起来。
@@ -7930,6 +8918,1181 @@
       return { n: best, unit: "月" };
     }
 
+    /* ============================================================
+       工作台（顶栏「统计」右边那个独立段位）
+       —— 参考图 1~6 那套「主页 / 热力图 / 打卡 / 曲线」的**单屏浓缩版**：
+       不新增数据源、不新增设置项，全部复用习惯 / 指标视图已有的口径
+       （_habitYearData / _habitConfig / _metricSeries），所以工作台上的数字
+       与习惯卡、指标视图完全一致，不会各算各的。
+
+       它跟其它段位是**同等**的：顶栏那组控件（类型筛选 / 翻页 / 今天）
+       在这里一样管用 ——
+         类型筛选：习惯类按「筛过的习惯名单」取，记录类按筛过的记录取；
+         翻页 / 今天：挪这张「过去一年」的右端（见 _boardWindow）。
+
+       四块（自上而下）：
+         ① 今日进度   问候语 + 今天日期 + 今日习惯 / 随想两条进度 + 打开日记
+                      （说的永远是「今天」，不跟着翻页走）
+         ② 完成热力图 过去一年的记录热力图（条数分档），列=周、行=日→六
+         ③ 习惯打卡   最近 30 天，一行一个习惯的打卡点阵 + 连续 / 完成率
+         ③′ 类型分布   这一段里各类型的占比条（条数 / 占比）
+         ③″ 类型时间轴 窗口右端那一天的 24 小时，按类型分段上色
+         ③‴ 类型时长汇总 整段窗口里各类型累计多久，一行一条横杆
+         ④ 指标走势   挑中的指标各一张小折线（复用 _metricChartSvg），整段窗口
+       ============================================================ */
+    /* 一串点 → **平滑曲线**的 SVG 路径（Fritsch–Carlson 单调三次插值）。
+       两条折线（工作台那张「记录趋势」、统计那边的「每日走势」）共用它。
+
+       为什么不用普通三次样条：这里画的是"当天记了几条"，
+       普通样条在「0 → 尖峰 → 0」这种形状上会**拱到 0 以下**，
+       画出根本不存在的负记录；单调插值按 Fritsch–Carlson 把过陡的切线
+       收回来，保证不过冲 —— 该平的段就老实平着，该尖的地方照样尖。
+       入参 pts 是 [{x, y}]，x 必须递增（这两处都是等距的"一天一格"）；
+       出参是可以直接塞进 path 的 d。 */
+    _smoothPath(pts) {
+      const n = pts ? pts.length : 0;
+      if (n === 0) return "";
+      if (n === 1) return `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+      const dx = [];
+      const slope = [];
+      for (let i = 0; i < n - 1; i++) {
+        const h = pts[i + 1].x - pts[i].x;
+        dx.push(h);
+        slope.push(h ? (pts[i + 1].y - pts[i].y) / h : 0);
+      }
+      /* 各点切线初值：左右差商的平均（首尾取单边） */
+      const m = new Array(n);
+      m[0] = slope[0];
+      m[n - 1] = slope[n - 2];
+      for (let i = 1; i < n - 1; i++) m[i] = (slope[i - 1] + slope[i]) / 2;
+      /* 收切线：把 (a,b) 拉回半径 3 的圆内，等价于"这一段不过冲" */
+      for (let i = 0; i < n - 1; i++) {
+        if (slope[i] === 0) {
+          m[i] = 0;
+          m[i + 1] = 0;
+          continue;
+        }
+        const a = m[i] / slope[i];
+        const b = m[i + 1] / slope[i];
+        const s = a * a + b * b;
+        if (s > 9) {
+          const t = 3 / Math.sqrt(s);
+          m[i] = t * a * slope[i];
+          m[i + 1] = t * b * slope[i];
+        }
+      }
+      /* 每段两个控制点放在三等分处（标准的 Hermite → Bézier 换法） */
+      let d = `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+      for (let i = 0; i < n - 1; i++) {
+        const h = dx[i];
+        d +=
+          ` C${(pts[i].x + h / 3).toFixed(1)} ${(pts[i].y + (m[i] * h) / 3).toFixed(1)}` +
+          ` ${(pts[i + 1].x - h / 3).toFixed(1)} ${(pts[i + 1].y - (m[i + 1] * h) / 3).toFixed(1)}` +
+          ` ${pts[i + 1].x.toFixed(1)} ${pts[i + 1].y.toFixed(1)}`;
+      }
+      return d;
+    }
+
+    _buildHabitBoardHtml() {
+      const now = new Date();
+      const todayKey = this._calKey(now);
+      /* 合并进来的「记录统计」那一整套区块（原「统计」段位）：
+         一次算完，块级 HTML 直接铺在下面 —— 它们的事件处理器都挂在
+         _bindCalendarTab 上、不判断当前是哪个视图，所以搬过来照样能点。
+         注意：**所有块都照算**，只是按当前分类决定铺哪几张。
+         算全量是有意的 —— 这些块共享同一批中间量（周期、锚点、按天/按月计数），
+         只算当前分类那几张反而要按分类重算一遍，而且切分类时还要重新走一遍
+         _habitYearData / _statsTypeDurations 这些缓存之外的步骤。 */
+      const stats = this._buildStatsParts();
+      /* 当前分类。越界 / 没设过（老会话、程序化跳转）一律回默认 ——
+         BOARD_TABS 以后增删分类也不会把状态卡在空的分类上。 */
+      const tab = BOARD_TAB_VALUES.indexOf(this._calTabBoardTab) >= 0
+        ? this._calTabBoardTab
+        : BOARD_TAB_DEFAULT;
+      const tabBlocks = (BOARD_TABS.find((t) => t.value === tab) || BOARD_TABS[0]).blocks;
+      const WD = ["日", "一", "二", "三", "四", "五", "六"];
+      const sicon = (id) =>
+        `<svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#${id}"></use></svg>`;
+
+      /* 顶栏那枚「全部类型」在工作台里同样管用：
+         记录类的区块（随想 / 热力图 / 指标）走筛过的那份记录；
+         习惯类的区块（今日习惯 / 打卡点阵）按筛过的习惯名单取，
+         口径与习惯视图一致 —— 习惯只认自己那个类型的记录。 */
+      const picked = this._calTabTypeFilter;
+      const records = this._calTabFilteredRecords() || [];
+      const types = picked && picked.size
+        ? this._habitTypes().filter((t) => picked.has(t))
+        : this._habitTypes();
+      /* 今日进度说的永远是「今天」，与工作台看的那一段无关 */
+      const ty = now.getFullYear();
+      /* 这一屏看的那一段：热力图 / 打卡点阵 / 指标走势三块共用一份窗口 */
+      const win = this._boardWindow();
+      const toDate = new Date(
+        +win.to.slice(0, 4),
+        +win.to.slice(5, 7) - 1,
+        +win.to.slice(8, 10)
+      );
+      const rangeLabel = this._metricRangeLabel(win.from, win.to);
+
+      /* —— ① 今日进度 —— */
+      const hh = now.getHours();
+      const greet =
+        hh < 6 ? "夜深了" : hh < 12 ? "早上好" : hh < 18 ? "下午好" : "晚上好";
+      /* 今日完成的习惯数：口径与顶部总览行一致（各按自己的周期结算） */
+      let todayDone = 0;
+      types.forEach((t) => {
+        const cfg = this._habitConfig(t);
+        const { days } = this._habitYearData(t, ty);
+        let ok = false;
+        if (cfg.period === "day") {
+          ok = this._habitPeriodAchieved(
+            cfg,
+            this._habitDayValue(days, todayKey, cfg)
+          );
+        } else if (cfg.period === "week") {
+          ok = this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(days, cfg, this._calTabWeekStartDate(now), 7)
+          );
+        } else {
+          ok = this._habitPeriodAchieved(
+            cfg,
+            this._habitPeriodSum(
+              days,
+              cfg,
+              new Date(ty, now.getMonth(), 1),
+              new Date(ty, now.getMonth() + 1, 0).getDate()
+            )
+          );
+        }
+        if (ok) todayDone += 1;
+      });
+      /* 「随想」= 今天写下的记录条数（当前数据源 + 当前类型筛选） */
+      const todayRecs = records.filter(
+        (r) => r && r.date === todayKey
+      );
+      const todayWords = todayRecs.reduce(
+        (n, r) => n + String((r && r.content) || "").length,
+        0
+      );
+      const dayOfYear =
+        Math.round(
+          (new Date(now.getFullYear(), now.getMonth(), now.getDate()) -
+            new Date(now.getFullYear(), 0, 1)) /
+            86400000
+        ) + 1;
+      const habitPct = types.length
+        ? Math.round((todayDone / types.length) * 100)
+        : 0;
+      const boardBar = (label, right, pct) =>
+        `<div class="north-caltab-board-bar">
+            <span class="north-caltab-board-bar-lab">${escapeHtml(label)}</span>
+            <span class="north-caltab-board-bar-val">${escapeHtml(right)}</span>
+            <div class="north-caltab-board-track"><i style="width:${Math.max(
+              0,
+              Math.min(100, pct)
+            )}%"></i></div>
+        </div>`;
+      const progressHtml = `<div class="north-caltab-board-card north-caltab-board-progress">
+            <div class="north-caltab-board-prog-main">
+                <div class="north-caltab-board-greet">${greet}</div>
+                <div class="north-caltab-board-date">${now.getMonth() + 1} 月 ${now.getDate()} 日</div>
+                <div class="north-caltab-board-sub">星期${WD[now.getDay()]} · 今年第 ${dayOfYear} 天</div>
+                <div class="north-caltab-board-chips">${
+                  types.length
+                    ? types
+                        .map((t) => {
+                          const cfg = this._habitConfig(t);
+                          const color = this._colorOf(t) || DEFAULT_TYPE_COLOR;
+                          return `<span class="north-caltab-board-chip" style="--tt-c:${escapeHtml(
+                            color
+                          )}"><i></i>${escapeHtml(cfg.alias || t)}</span>`;
+                        })
+                        .join("")
+                    : `<span class="north-caltab-board-chip is-off">还没有习惯</span>`
+                }</div>
+            </div>
+            <div class="north-caltab-board-prog-side">
+                ${boardBar("今日习惯", `${todayDone} / ${types.length} 项`, habitPct)}
+                ${boardBar(
+                  "随想",
+                  `${todayWords} 字`,
+                  Math.min(100, (todayWords / 200) * 100)
+                )}
+                <button class="north-caltab-board-diary" type="button" data-caltab-act="todaydiary">${sicon(
+                  "iconCalendar"
+                )}打开今天的日记</button>
+            </div>
+        </div>`;
+
+      /* —— ② 记录趋势 / 本期 vs 上期：**最近 7 天**（右端 = 当前锚点） ——
+         习惯是按周读的：七天一屏，每天一个点看得清，这一周的起伏也看得出来。
+         原来按一年铺，365 个点挤成一条几乎贴地的直线，什么也读不出来
+         （日历热力图那张更空，已整个去掉）。
+         一年的逐日表仍然留着，但**只给「连续天数」用** —— 连续得看长一点，
+         只看七天的话「最长连续」永远在 7 以内，那个数就没意义了。 */
+      const heatFrom = new Date(
+        toDate.getFullYear(),
+        toDate.getMonth(),
+        toDate.getDate() - 364
+      );
+      const heatFromKey = this._calKey(heatFrom);
+      const heatCount = {};
+      records.forEach((r) => {
+        if (!r || !r.date) return;
+        if (r.date < heatFromKey || r.date > win.to) return;
+        heatCount[r.date] = (heatCount[r.date] || 0) + 1;
+      });
+      /* 这张卡真正看的那七天（含锚点那天），以及紧挨在它前面的七天 ——
+         上期与本期**等长且相邻**，两个数才谈得上可比。 */
+      const dayAgo = (n) =>
+        this._calKey(new Date(toDate.getTime() - n * 86400000));
+      const weekKeys = [];
+      const prevWeekKeys = [];
+      for (let i = 6; i >= 0; i--) weekKeys.push(dayAgo(i));
+      for (let i = 13; i >= 7; i--) prevWeekKeys.push(dayAgo(i));
+      const totalCnt = weekKeys.reduce((s, k) => s + (heatCount[k] || 0), 0);
+      const recordDays = weekKeys.filter((k) => heatCount[k]).length;
+      const prevDaySet = new Set();
+      let prevTotalCnt = 0;
+      prevWeekKeys.forEach((k) => {
+        const c = heatCount[k] || 0;
+        if (!c) return;
+        prevTotalCnt += c;
+        prevDaySet.add(k);
+      });
+      const prevRecordDays = prevDaySet.size;
+      const weekLabel = this._metricRangeLabel(weekKeys[0], weekKeys[6]);
+      /* —— 折线趋势：这七天**每天**记了多少，**一个习惯一条曲线** ——
+         版式照参考图：多条平滑曲线 + 淡色面积 + 每天一个圆点 + 顶部图例。
+         颜色跟着类型色走，一眼看出"哪个习惯这周勤、哪个荒了"。
+         （原先是一条总曲线 / 再早是一张日历热力图，都只给"总共多少"，分不出习惯。） */
+      /* 逐日取数：把下面 ③ 打卡点阵那套「按年合并」的取法搬上来共用 ——
+         同一段数据两个块读，别再各写一份。 */
+      const spanDays = 30;
+      const boardDayKeys = [];
+      for (let i = spanDays - 1; i >= 0; i--) {
+        boardDayKeys.push(
+          this._calKey(new Date(toDate.getTime() - i * 86400000))
+        );
+      }
+      /* 近 30 天可能跨到去年（1 月初）：把涉及的年份的数据并起来，
+         否则年初那几天在工作台上会凭空变成「没记录」。 */
+      const boardYears = [];
+      const y0 = +boardDayKeys[0].slice(0, 4);
+      const y1 = +boardDayKeys[boardDayKeys.length - 1].slice(0, 4);
+      for (let y = y0; y <= y1; y++) boardYears.push(y);
+      const boardDaysOf = (t) => {
+        const merged = {};
+        boardYears.forEach((y) => {
+          Object.assign(merged, this._habitYearData(t, y).days);
+        });
+        return merged;
+      };
+      /* 一个习惯一条曲线：纵轴是**当天记了几条**（raw.cnt）——
+         不管习惯的单位是次数还是分钟，"记了几条"在习惯之间才可比；
+         按分钟画的话次数型与分钟型会挤在同一根轴上互相打架。 */
+      const trendSeries = types.map((t) => {
+        const cfg = this._habitConfig(t);
+        const days = boardDaysOf(t);
+        return {
+          name: cfg.alias || t,
+          color: this._colorOf(t) || DEFAULT_TYPE_COLOR,
+          pts: weekKeys.map((k) => ({ key: k, cnt: (days[k] && days[k].cnt) || 0 })),
+        };
+      });
+      const trendDays = weekKeys.length;
+      const trendMax = Math.max(
+        1,
+        ...trendSeries.flatMap((s) => s.pts.map((p) => p.cnt))
+      );
+      /* 画布比统计那条走势**高不少**（1000×330，那条是 1000×200）：
+         只有七个点，铺在原来的扁画布里是一条几乎没起伏的线；
+         做高之后曲线有起伏的余地，也正好和右边那栏卡片自然等高
+         （两栏的等高由 CSS 的 align-items: stretch 兜底）。 */
+      const TW = 1000;
+      const TH = 330;
+      const padT = 24;
+      const padB = 46;
+      const plotH = TH - padT - padB;
+      /* 叫 txOf / tyOf 而不是 tx / ty：这个方法里 `ty` 已经是"今年"（today year）了，
+         撞名会直接把整段编译掉 —— 别再改回来。
+         **左右各留 padX**：第一个点和最后一个点正好压在 0 和 1000 上的话，
+         圆点会被卡片边缘裁掉一半（上一版就是这个问题）。 */
+      const padX = 18;
+      const txOf = (i) =>
+        padX + (trendDays > 1 ? ((TW - padX * 2) * i) / (trendDays - 1) : (TW - padX * 2) / 2);
+      const tyOf = (c) => padT + plotH - (plotH * c) / trendMax;
+      let tickStep;
+      if (trendMax <= 5) tickStep = 1;
+      else if (trendMax <= 10) tickStep = 2;
+      else tickStep = Math.ceil(trendMax / 5);
+      let trendGrid = "";
+      for (let v = tickStep; v <= trendMax; v += tickStep) {
+        trendGrid += `<line x1="0" y1="${tyOf(v).toFixed(1)}" x2="${TW}" y2="${tyOf(
+          v
+        ).toFixed(
+          1
+        )}" stroke="var(--b3-border-color)" stroke-dasharray="4 5" stroke-width="1" opacity="0.55"/>`;
+        trendGrid += `<text x="6" y="${(tyOf(v) - 5).toFixed(
+          1
+        )}" class="north-caltab-board-trend-axis">${v}</text>`;
+      }
+      /* 七天里**一条都没记**的习惯不出曲线：它的"曲线"是一条贴在 y=0 上的直线，
+         和坐标轴糊在一起，颜色刺一点的（红）还会被当成底线本身。
+         图例说的是"图上有哪几条线"，所以一并摘掉；哪个习惯这周荒了，
+         看下面那张 30 天点阵（全习惯都在，一条不省）。
+         命中区提示里仍然列它 —— 那天确实是 0 条，这是事实，不删。 */
+      const trendShown = trendSeries.filter((s) => s.pts.some((p) => p.cnt > 0));
+      /* 曲线，不是折线：点与点之间走平滑插值（见 _smoothPath 的注释）。
+         **一条曲线一个习惯**；面积走渐变（参考图"丝滑"的关键：贴着曲线是淡实色、
+         往基线淡到接近透明），多条叠在一起也不糊。 */
+      /* 渐变 id 带渲染序号：工作台每次交互都整段重画，旧 SVG 虽被换掉，
+         序号照样递增，重号永远不会发生。 */
+      this._boardTrendSeq = (this._boardTrendSeq || 0) + 1;
+      const trendPaths = trendShown.map((s) => {
+        const line = this._smoothPath(
+          s.pts.map((p, i) => ({ x: txOf(i), y: tyOf(p.cnt) }))
+        );
+        const area =
+          trendDays > 1
+            ? line +
+              ` L${txOf(trendDays - 1).toFixed(1)},${tyOf(0).toFixed(1)}` +
+              ` L${txOf(0).toFixed(1)},${tyOf(0).toFixed(1)} Z`
+            : "";
+        return { ...s, line, area };
+      });
+      /* 一条曲线一个 linearGradient（默认 objectBoundingBox：从曲线所在高度淡到基线）。
+         顶档浓度别超过 0.3 —— 深色主题下同样的 alpha 会被放大，抢内容的戏。 */
+      const trendDefs = trendPaths
+        .map(
+          (s, i) =>
+            `<linearGradient id="tt-board-trend-g${this._boardTrendSeq}-${i}" x1="0" y1="0" x2="0" y2="1">` +
+            `<stop offset="0%" stop-color="${escapeHtml(s.color)}" stop-opacity="0.3"/>` +
+            `<stop offset="100%" stop-color="${escapeHtml(s.color)}" stop-opacity="0.02"/>` +
+            `</linearGradient>`
+        )
+        .join("");
+      const trendCurves = trendPaths
+        .map(
+          (s, i) =>
+            `<path d="${s.area}" class="north-caltab-board-trend-area" style="fill:url(#tt-board-trend-g${this._boardTrendSeq}-${i})"/><path d="${s.line}" class="north-caltab-board-trend-line" style="stroke:${escapeHtml(
+              s.color
+            )}"/>`
+        )
+        .join("");
+      /* 圆点提示：习惯名 · 那天 · 几条。0 条写"暂无记录"不写"0 条记录" ——
+         0 是事实，但"暂无记录"更像人话（统计视图同款口径）。
+         可见圆点和下面的透明命中圆共用它，别各写一份（会漂移）。 */
+      const dotTip = (s, p) =>
+        `${s.name} · ${p.key} · ${
+          p.cnt > 0 ? `${p.cnt} ${this._calUnit()}` : "暂无记录"
+        }`;
+      /* 圆点：七天 × 每个习惯一个，颜色跟各自的曲线走。
+         **描边环，不是实心点**：环里填卡片背景色，压在面积上、曲线上都干净，
+         两种主题下都不抢眼（参考图就是这个画法）；描边色按习惯内联。 */
+      const trendDots = trendPaths
+        .map((s) =>
+          s.pts
+            .map(
+              (p, i) =>
+                `<circle cx="${txOf(i).toFixed(1)}" cy="${tyOf(p.cnt).toFixed(
+                  1
+                )}" r="4" class="north-caltab-board-trend-dot" style="stroke:${escapeHtml(
+                  s.color
+                )}" data-tip="${escapeHtml(dotTip(s, p))}"/>`
+            )
+            .join("")
+        )
+        .join("");
+      /* 命中区：一天一条**竖带**（盖住整列），点一下 = 把类型时间轴钉到那天。
+         提示里把当天各习惯的条数都列出来（"这天大家都干了多少"的总览）。
+         它渲染在圆点**下面**：鼠标在列里空白处 = 总览，落在圆点上 =
+         上面那层透明命中圆接管，显示单习惯 —— 两层各管一段，互不抢。 */
+      const trendHits = weekKeys
+        .map((key, i) => {
+          const w =
+            trendDays > 1 ? (TW - padX * 2) / (trendDays - 1) : TW - padX * 2;
+          const lines = trendSeries
+            .map((s) => `${s.name} ${s.pts[i].cnt} ${this._calUnit()}`)
+            .join(" · ");
+          return `<rect x="${(txOf(i) - w / 2).toFixed(1)}" y="${padT - 10}" width="${w.toFixed(
+            1
+          )}" height="${plotH + 20}" fill="transparent" data-tip="${escapeHtml(
+            `${key} · ${lines || "暂无记录"}`
+          )}" data-caltab-act="boardday" data-caltab-day="${key}"/>`;
+        })
+        .join("");
+      /* 每个圆点再罩一层**透明命中圆**（SVG 最顶层，盖住竖带）：
+         竖带盖住整列，圆点自己的"单习惯"提示被压在下面永远出不来 ——
+         用户截图报过"鼠标移到哪个习惯就该显示哪个，而不是显示全部"。
+         命中圆比可见圆点大（r=10，与统计视图 .north-caltab-stats-hit 同款），
+         悬浮它 = 那条习惯那天的提示；点击属性与竖带相同
+         （点圆点也等于点那天，照常钉住时间轴）。
+         相邻天的圆心距约 160（viewBox 单位），半径 10 不会互相盖。 */
+      const trendDotHits = trendPaths
+        .map((s) =>
+          s.pts
+            .map(
+              (p, i) =>
+                `<circle cx="${txOf(i).toFixed(1)}" cy="${tyOf(p.cnt).toFixed(
+                  1
+                )}" r="10" fill="transparent" class="north-caltab-board-trend-dothit" data-tip="${escapeHtml(
+                  dotTip(s, p)
+                )}" data-caltab-act="boardday" data-caltab-day="${p.key}"/>`
+            )
+            .join("")
+        )
+        .join("");
+      /* 底部日期标签：七天就**每天标一个**（M/D，与参考图一致）。
+         首尾贴边改左 / 右对齐，免得被 viewBox 裁掉。 */
+      const trendXLabels = weekKeys
+        .map((key, i) => {
+          const m = key.match(/^\d{4}-(\d{2})-(\d{2})$/);
+          const side = i === 0 ? "start" : i === trendDays - 1 ? "end" : "middle";
+          return `<text x="${txOf(i).toFixed(
+            1
+          )}" y="${TH - padB + 24}" text-anchor="${side}" class="north-caltab-board-trend-axis">${+m[1]}/${+m[2]}</text>`;
+        })
+        .join("");
+      /* 图例：颜色点 + 习惯名（有别名用别名），跟曲线一一对应
+         （全零的习惯已摘掉，见上面 trendShown 的注释） */
+      const trendLegend = trendShown
+        .map(
+          (s) =>
+            `<span class="north-caltab-board-trend-leg"><i style="background:${escapeHtml(
+              s.color
+            )}"></i>${escapeHtml(s.name)}</span>`
+        )
+        .join("");
+      /* 连续天数：**故意看整年**（heatCount 是一整年的逐日表），
+         不吃上面那七天 —— 只看七天的话最长连续永远 ≤ 7，那个数就白报了。
+         卡底那行会写上「自 X月X日」，所以读者知道它看的是更长的一段。 */
+      let curStreak = 0;
+      let bestStreak = 0;
+      /* 两段连续各自的**日期**也留着：数字卡下面那行说明要用
+         （「自 10月13日」「10月12日 ~ 10月13日」）—— 只报一个天数太干。 */
+      let bestFromKey = "";
+      let bestToKey = "";
+      let curStartKey = "";
+      {
+        let run = 0;
+        let prevMs = 0;
+        let runStartKey = "";
+        Object.keys(heatCount)
+          .sort()
+          .forEach((k) => {
+            const t = new Date(k + "T00:00:00").getTime();
+            if (prevMs && Math.round((t - prevMs) / 86400000) === 1) run += 1;
+            else {
+              run = 1;
+              runStartKey = k;
+            }
+            prevMs = t;
+            if (run > bestStreak) {
+              bestStreak = run;
+              bestFromKey = runStartKey;
+              bestToKey = k;
+            }
+          });
+        /* 「当前连续」从窗口右端往前数，不越出这张图 */
+        const cur = new Date(toDate);
+        if (!heatCount[this._calKey(cur)]) cur.setDate(cur.getDate() - 1);
+        while (
+          heatCount[this._calKey(cur)] &&
+          this._calKey(cur) >= heatFromKey &&
+          curStreak < 4000
+        ) {
+          curStreak += 1;
+          /* 一路往前数，**最后**赋上的那个就是这一段最早的一天 */
+          curStartKey = this._calKey(cur);
+          cur.setDate(cur.getDate() - 1);
+        }
+      }
+      const shortDay = (key) => {
+        const m = String(key || "").match(/^\d{4}-(\d{2})-(\d{2})$/);
+        return m ? `${+m[1]}月${+m[2]}日` : "";
+      };
+      /* —— 右边那张卡：九块 3×3 ——
+         三行各有说法：上行"记了多少"（条数 / 天数 / 日均），
+         中行"最好一天与连续性"（单日最多 / 当前连续 / 最长连续），
+         下行"习惯的面"（追踪 / 活跃 / 记录最多）。
+         每块同一套读法（与 6 张数字卡一致）：名目 → 大数字 → 一行灰字上下文。
+         前两块带环比徽标；**连续不做环比**（"连续多几天"没有意义），
+         上下文是"自哪天起 / 出现在哪一段"—— 这是这两个数唯一的读法。
+         **格子只有 ~60px 宽，块内单位一律用短词**（条 / 天 / 个，不写"条记录"）：
+         名目里已经写了"记录条数"，不缺信息；长单位会把数字挤到下一行。
+         上下文只写一行说得清的：徽标或日期段已经说清的事不另写一句
+         "比上一周期增加 N"—— 同一件事写两遍是啰嗦。
+         环比 = (本期 − 上期) / 上期；**上期为 0 时不写百分比**（除零没有意义），
+         改写成「环比 +N」；两期都空不挂徽标，上下文那行直接说"都还是空的"。 */
+      /* 日均：按这七天平摊（一位小数；整数不带 .0，7 条就是"1"不是"1.0"） */
+      const avgCnt = Math.round((totalCnt / 7) * 10) / 10;
+      /* 单日最多：这七天里条数最凶的那天（并列取最早的那天） */
+      let peakCnt = 0;
+      let peakKey = "";
+      weekKeys.forEach((k) => {
+        const c = heatCount[k] || 0;
+        if (c > peakCnt) {
+          peakCnt = c;
+          peakKey = k;
+        }
+      });
+      /* 记录最多：这七天条数最多的习惯（并列取 types 里靠前的）；
+         别名优先 —— 习惯卡上显示的就是别名，这里要对得上。 */
+      const habitWeekSum = (s) => s.pts.reduce((sum, p) => sum + p.cnt, 0);
+      const topHabit = trendSeries.reduce(
+        (best, s) => (best && habitWeekSum(best) >= habitWeekSum(s) ? best : s),
+        null
+      );
+      /* 块内短单位：条 / 篇（docs 源）。只在这张卡里用 —— 宽版面
+         （趋势卡头、提示）照样写全"条记录"。 */
+      const unitShort = this._calUnit().replace(/(记录|文档)$/, "");
+      /* 卡头下那一行小字：把"本期 / 上期"到底是哪几天写出来 ——
+         环比徽标和"上周期 N"比的到底是哪两段，看这行就不用猜。
+         日期用 M/D 短式（与折线图轴标签同一套），一行放得下；
+         内容随翻页走（weekKeys / prevWeekKeys 都是这一屏的窗口）。 */
+      const mdShort = (k) => {
+        const m = String(k || "").match(/^\d{4}-(\d{2})-(\d{2})$/);
+        return m ? `${+m[1]}/${+m[2]}` : "";
+      };
+      const rangeNote = `本期 ${mdShort(weekKeys[0])} ~ ${mdShort(
+        weekKeys[6]
+      )} · 上期 ${mdShort(prevWeekKeys[0])} ~ ${mdShort(prevWeekKeys[6])}`;
+      const statBlock = (lab, num, unit, ctx, badge) =>
+        `<div class="north-caltab-board-delta">
+                <div class="north-caltab-board-delta-name">${escapeHtml(lab)}</div>
+                <div class="north-caltab-board-delta-v">${num}<span>${escapeHtml(
+          unit
+        )}</span></div>
+                <div class="north-caltab-board-delta-note">${escapeHtml(ctx)}${
+          badge || ""
+        }</div>
+            </div>`;
+      /* 环比徽标：上期 > 0 写百分比；上期 = 0 且本期 > 0 写「环比 +N」；
+         两期都空返回空串（不挂徽标）。 */
+      const deltaBadge = (val, prev, unit) => {
+        const d = val - prev;
+        if (prev > 0) {
+          const pct = Math.round((d / prev) * 100);
+          return `<span class="north-caltab-board-delta-badge">环比 ${
+            pct > 0 ? "+" : pct < 0 ? "−" : "±"
+          }${Math.abs(pct)}%</span>`;
+        }
+        if (val > 0) {
+          return `<span class="north-caltab-board-delta-badge">环比 +${val} ${escapeHtml(
+            unit
+          )}</span>`;
+        }
+        return "";
+      };
+      const deltaBlock = (lab, val, prev, unit) =>
+        statBlock(
+          lab,
+          val,
+          unit,
+          val > 0 || prev > 0 ? `上周期 ${prev} ${unit}` : "两期都空",
+          deltaBadge(val, prev, unit)
+        );
+      /* 连续块：上下文是日期段；0 天时不说"自哪天"（没有可说的起），
+         也不冒充"今天没记"—— 窗口右端不是今天的话那句话是假的。 */
+      const streakBlock = (lab, n, ctx) =>
+        statBlock(lab, n, "天", ctx || "还没有连续记录", "");
+      const deltaHtml = `<div class="north-caltab-board-card north-caltab-board-deltas">
+            <div class="north-caltab-board-cardhead"><span class="north-caltab-board-cardtitle">本期概览</span><span class="north-caltab-board-cardsub">近七天 · 连续看全年</span></div>
+            <div class="north-caltab-board-deltas-note">${escapeHtml(rangeNote)}</div>
+            ${deltaBlock("记录条数", totalCnt, prevTotalCnt, unitShort)}
+            ${deltaBlock("记录天数", recordDays, prevRecordDays, "天")}
+            ${statBlock("日均记录", avgCnt, unitShort, "七天平均", "")}
+            ${statBlock(
+              "单日最多",
+              peakCnt,
+              unitShort,
+              peakCnt ? shortDay(peakKey) : "还没有记录",
+              ""
+            )}
+            ${streakBlock("当前连续", curStreak, curStreak ? `自 ${shortDay(curStartKey)}` : "")}
+            ${streakBlock(
+              "最长连续",
+              bestStreak,
+              bestStreak
+                ? bestStreak > 1
+                  ? `${shortDay(bestFromKey)} ~ ${shortDay(bestToKey)}`
+                  : shortDay(bestToKey)
+                : ""
+            )}
+            ${statBlock(
+              "追踪习惯",
+              types.length,
+              "个",
+              picked && picked.size ? "顶栏筛后" : "全部习惯",
+              ""
+            )}
+            ${statBlock("活跃习惯", trendShown.length, "个", `共 ${types.length} 个`, "")}
+            ${statBlock(
+              "记录最多",
+              topHabit ? habitWeekSum(topHabit) : 0,
+              unitShort,
+              topHabit && habitWeekSum(topHabit) > 0 ? topHabit.name : "还没有记录",
+              ""
+            )}
+        </div>`;
+      /* 两栏并排：左折线、右概览。比例 3:2（原 2:1）—— 右栏是九块 3×3，
+         格子要更宽才排得下徽标；左折线仍拿大头。窄屏退成一栏（见 CSS 媒体查询）。 */
+      const trendHtml = `<div class="north-caltab-board-heatrow">
+            <div class="north-caltab-board-card north-caltab-board-trendcard">
+                <div class="north-caltab-board-cardhead"><span class="north-caltab-board-cardtitle">记录趋势</span><span class="north-caltab-board-cardsub">${escapeHtml(
+                  weekLabel
+                )} · 共 <b>${totalCnt}</b> ${this._calUnit()}</span></div>
+                ${
+                  trendShown.length
+                    ? `<div class="north-caltab-board-trend-legend">${trendLegend}</div>
+                <svg class="north-caltab-board-trend" viewBox="0 0 ${TW} ${TH}" role="img" aria-label="最近七天各习惯记录趋势图">
+                    <defs>${trendDefs}</defs>
+                    ${trendGrid}
+                    ${trendCurves}
+                    ${trendDots}
+                    ${trendXLabels}
+                    ${trendHits}
+                    ${trendDotHits}
+                </svg>`
+                    : `<div class="north-caltab-board-empty">${
+                        trendSeries.length
+                          ? "这七天还没有习惯记录 —— 记上一笔，这里就会出现曲线。"
+                          : "还没有挑出习惯 —— 去「习惯」里选几个，这里就会一条曲线一个习惯。"
+                      }</div>`
+                }
+            </div>
+            ${deltaHtml}
+        </div>`;
+
+      /* —— ③ 习惯打卡：一行一个习惯的点阵 ——
+         列 = 最近 30 天，右端跟着锚点走（翻页时整条跟着挪）。
+          一年 365 列铺进一屏每个格子就只剩几像素，所以这里固定取最近 30 天；
+          想看更长的一段有上面的「记录趋势」（七天）和指标走势（整段）。
+          spanDays / boardDayKeys / boardDaysOf 这些取数的家伙式在**上面 ② 里**
+          （趋势图也在用同一份），这里不再重复声明。 */
+      /* 每 7 天标一个日期（与参考图那种均匀刻度一致）；离末尾不足 3 格的
+         那个不画 —— 它居中时会探出去压到右边的「连续」表头，省掉最干净。 */
+      const boardHeadLabels = boardDayKeys.map((k, i) => {
+        const m = k.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (i % 7 !== 0) return "";
+        if (spanDays - 1 - i < 3) return "";
+        return `${+m[2]}/${+m[3]}`;
+      });
+      let lastTick = -1;
+      boardHeadLabels.forEach((lab, i) => {
+        if (lab) lastTick = i;
+      });
+      const boardHead = boardHeadLabels
+        .map(
+          (lab, i) =>
+            `<span class="north-caltab-board-dcell-h${
+              i === lastTick ? " is-last" : i === 0 ? " is-first" : ""
+            }">${lab}</span>`
+        )
+        .join("");
+      const boardRows = types
+        .map((t) => {
+          const cfg = this._habitConfig(t);
+          const color = this._colorOf(t) || DEFAULT_TYPE_COLOR;
+          const days = boardDaysOf(t);
+          let done = 0;
+          const cells = boardDayKeys
+            .map((k) => {
+              const raw = days[k];
+              const v = this._habitDayValue(days, k, cfg);
+              /* 「这一天算不算做到」要按习惯自己的周期来：
+                 日目标 → 当天值达标；周 / 月目标 → 成功单元是整周 / 整月，
+                 单看一天没有意义，那天**打了卡**就算做到（口径与年热力
+                 把「有记录」记为等级 1 一致）。 */
+              const ok =
+                cfg.period === "day"
+                  ? this._habitPeriodAchieved(cfg, v)
+                  : !!raw;
+              const off = this._habitOffState(cfg, k);
+              if (raw && ok) done += 1;
+              const cls = ["north-caltab-board-dcell"];
+              if (raw) cls.push("is-record");
+              if (raw && ok) cls.push("is-done");
+              if (off) cls.push("is-off");
+              if (k > todayKey) cls.push("is-future");
+              const tip = off
+                ? `${k} · ${off < 0 ? "未开始" : "已结束"}`
+                : raw
+                  ? `${k} · ${this._fmtStatsDur(raw.min)} · ${raw.cnt} ${this._calUnit()}${
+                      cfg.period === "day"
+                        ? ` · ${ok ? "达标" : "未达标"}`
+                        : ` · 本期累计中`
+                    }`
+                  : `${k} · 未记录`;
+              return `<div class="${cls.join(" ")}" style="--tt-c:${escapeHtml(
+                color
+              )}" data-tip="${escapeHtml(tip)}"></div>`;
+            })
+            .join("");
+          const rate = Math.round((done / spanDays) * 100);
+          const streak = this._habitStreak(days, toDate.getFullYear(), cfg);
+          return `<div class="north-caltab-board-habit">
+                <span class="north-caltab-board-habit-name" style="--tt-c:${escapeHtml(
+                  color
+                )}"><i></i>${escapeHtml(cfg.alias || t)}</span>
+                <div class="north-caltab-board-dgrid">${cells}</div>
+                <span class="north-caltab-board-habit-streak">${sicon(
+                  "iconPlugZap"
+                )}${streak.n}</span>
+                <span class="north-caltab-board-habit-rate">${rate}%</span>
+            </div>`;
+        })
+        .join("");
+      const boardRate = types.length
+        ? Math.round(
+            types.reduce((s, t) => {
+              const cfg = this._habitConfig(t);
+              const days = boardDaysOf(t);
+              let done = 0;
+              boardDayKeys.forEach((k) => {
+                if (!days[k]) return;
+                if (cfg.period === "day") {
+                  if (
+                    this._habitPeriodAchieved(
+                      cfg,
+                      this._habitDayValue(days, k, cfg)
+                    )
+                  )
+                    done += 1;
+                } else done += 1;
+              });
+              return s + (done / spanDays) * 100;
+            }, 0) / types.length
+          )
+        : 0;
+      const habitHtml = `<div class="north-caltab-board-card north-caltab-board-habits">
+            <div class="north-caltab-board-cardhead"><span class="north-caltab-board-cardtitle">习惯打卡</span><span class="north-caltab-board-cardsub">近 ${spanDays} 天 · 完成 <b>${boardRate}%</b></span></div>
+            ${
+              types.length
+                ? `<div class="north-caltab-board-dhead"><span class="north-caltab-board-habit-name is-head"></span><div class="north-caltab-board-dgrid">${boardHead}</div><span class="north-caltab-board-habit-streak is-head">连续</span><span class="north-caltab-board-habit-rate is-head">完成率</span></div>${boardRows}`
+                : `<div class="north-caltab-board-empty">${
+                    picked && picked.size
+                      ? "当前筛选里没有习惯 —— 习惯是按「设置 → 习惯设置」里挑的那几个类型算的。"
+                      : "还没有设置习惯，去「设置 → 习惯设置」里挑几个类型。"
+                  }</div>`
+            }
+            <div class="north-caltab-board-dlegend"><span><i class="north-caltab-board-dcell is-done" style="--tt-c:var(--b3-theme-primary)"></i>达标</span><span><i class="north-caltab-board-dcell is-record"></i>未达标</span><span><i class="north-caltab-board-dcell"></i>没有记录</span></div>
+        </div>`;
+
+      /* —— ③′ 类型分布：这一段里各类型各占多少（占比条 + 条数 + 占比） ——
+         条数直接数记录（与上面热力图那张卡的合计是同一份数据、同一个数）；
+         用时走统计视图那套口径（_statsTypeDurations），只放悬停气泡里 ——
+         行上留条数与占比就够读了。顶栏筛了类型就只剩筛中的那些，
+         所以「看哪个类型更重」和「只看某一个」两件事在同一屏里连得起来。 */
+      /* 这一段里的记录（跟顶栏类型筛选走）。下面三张「类型」卡各看各的一段 ——
+         默认都是工作台那段滚动的一年，卡上切了周期才各看各的；
+         所以这里只备好「按一段取记录」的小工具，不再预先算一份窗口内的数。 */
+      const recsIn = (from, to) =>
+        records.filter((r) => r && r.date && r.date >= from && r.date <= to);
+
+      /* 「各类型条数」这张卡（早先叫「类型分布」）**已按要求移除** ——
+         它与「类型」分类里那张环形的「类型分布」是**同一份数据**：
+         环形已经同时给了占比与条数，横条这张只是把同一个数换个方向再排一遍。
+         想恢复的话：它是从 recsIn(from, to) 数条数 + _statsTypeDurations 取用时
+         现算出来的，_boardCardHead("type", "各类型条数", …) 那套卡头控件也还在，
+         在 BOARD_TABS 里给某个分类加回 "typeCount"、并在块表里接上即可。 */
+
+      /* —— ③″ 类型时间轴：**一天**的 24 小时按类型分段上色 ——
+         参考图那块「每日时间轴」的读法：横向铺开 00:00 → 24:00，
+         每种类型一段色块，上面一行图例、下面两小时一格刻度。
+
+         它天生是单日的图，所以这里给它一个**自己的日期**：
+           ① 点热力图上某一格 → 就钉在那一天（卡头出现「回到今天」）；
+           ② 卡头切到「周 / 月」→ 那就把这几天 / 这一个月的记录**叠**成一张图
+              （同类型同小时段的色块合并，读的是「这段日子几点在做什么」）；
+           ③ 都没指定 → 跟工作台窗口的右端（默认就是今天）走。
+         三档共用下面同一份摆段逻辑，只有「看哪几天」不一样。 */
+      const tlPeriod = this._calTabBoardTlPeriod || "day";
+      const tlAnchor =
+        this._calTabBoardTlAnchor instanceof Date
+          ? this._calTabBoardTlAnchor
+          : this._calTabBoardDay
+            ? new Date(`${this._calTabBoardDay}T00:00:00`)
+            : null;
+      const tlWin = this._boardCardWindow(tlPeriod, tlAnchor);
+      /* 「日」这一档就是一天；「周 / 月」把区间里那几天合成一张图，
+         所以下面的 dayKeys 是**要摆的日期清单**，不再只有一个 key。 */
+      const tlDayKeys = [];
+      {
+        const s = new Date(`${tlWin.from}T00:00:00`);
+        const e = new Date(`${tlWin.to}T00:00:00`);
+        const n = Math.round((e - s) / 86400000) + 1;
+        /* 月视图最多 31 天，一天一天铺得下；再长（理论上到不了）就截住，
+           免得一次渲染几千个块把这一屏卡死 */
+        for (let i = 0; i < Math.min(n, 31); i++) {
+          const d = new Date(s.getTime() + i * 86400000);
+          tlDayKeys.push(this._calKey(d));
+        }
+      }
+      const tlDays = tlDayKeys.map((k) => new Date(`${k}T00:00:00`));
+      /* 一天一行：日视图只有一行（大横条），周 / 月是多行（每行一条细横条）。
+         多行时不铺图例（色点已经贴在每一段上），单行时铺 —— 参考图那样。 */
+      const tlMulti = tlDays.length > 1;
+      /* 每 2 小时一条刻度（与参考图一致）；窄屏由样式表隔一条藏一条 */
+      const tlTicks = [];
+      for (let h = 0; h <= 24; h += 2) {
+        tlTicks.push(
+          `<span class="north-caltab-board-tltick${
+            h % 4 === 0 ? " is-wide" : ""
+          }" style="left:${((h / 24) * 100).toFixed(3)}%">${pad2(h)}:00</span>`
+        );
+      }
+      const tlLines = [];
+      for (let h = 2; h < 24; h += 2) {
+        tlLines.push(
+          `<i style="left:${((h / 24) * 100).toFixed(3)}%"></i>`
+        );
+      }
+      /* 图例按出现的先后排（哪种类型先出现就先列） */
+      const tlSeen = new Map();
+      let tlTotalMin = 0;
+      const tlRowHtml = tlDays
+        .map((d) => {
+          const k = this._calKey(d);
+          const rows = this._calDayRows(
+            records.filter((r) => r && r.date === k)
+          ).filter((x) => x.range);
+          let segs = "";
+          rows.forEach((x) => {
+            const t = ((x.record && x.record.type) || "").trim();
+            const color = t ? this._colorOf(t) : DEFAULT_TYPE_COLOR;
+            const name = t || "未归类";
+            if (!tlSeen.has(name)) tlSeen.set(name, color);
+            /* 算得出区间（有上一条 / 手写了起止）就按区间铺；
+               当天只有一条、又没有起止时算不出跨度 —— 这种只留一枚「时间点」
+               标记，否则只有一条记录的日记会看到一条空荡荡的时间轴，
+               像是插件没读到数据。 */
+            const solid = x.hasRange && x.end > x.start;
+            if (solid) tlTotalMin += x.dur;
+            const left = ((solid ? x.start : x.range.start) / 1440) * 100;
+            const width = solid ? ((x.end - x.start) / 1440) * 100 : 0.4;
+            segs += `<i class="north-caltab-board-tlseg${
+              solid ? "" : " is-point"
+            }" style="left:${left.toFixed(3)}%;width:${Math.max(
+              solid ? 0.12 : 0,
+              width
+            ).toFixed(3)}%;background:${escapeHtml(color)}" data-tip="${escapeHtml(
+              solid
+                ? `${k} ${this._fmtMin(x.start)} ~ ${this._fmtMin(
+                    x.end
+                  )} · ${name} · ${this._fmtDurShort(x.dur)}`
+                : `${k} ${this._fmtMin(x.range.start)} · ${name} · 只记了时间点，不计时长`
+            )}"></i>`;
+          });
+          const track = `<div class="north-caltab-board-tltrack${
+            tlMulti ? " is-thin" : ""
+          }"><div class="north-caltab-board-tllines">${tlLines.join(
+            ""
+          )}</div>${segs}</div>`;
+          if (!tlMulti) return track;
+          /* 还没到的日子整行压淡：周 / 月这两档会铺到周期末尾，
+             未来那几天本来就没有记录，压淡才不会让人误以为「数据丢了」 */
+          const future = k > todayKey;
+          return `<div class="north-caltab-board-tlrow${
+            future ? " is-future" : ""
+          }"><span class="north-caltab-board-tlrowlab">${
+            d.getMonth() + 1
+          }/${d.getDate()}</span>${track}</div>`;
+        })
+        .join("");
+      const tlLegend = Array.from(tlSeen.keys())
+        .map(
+          (name) =>
+            `<span class="north-caltab-board-tllegitem" style="--tt-c:${escapeHtml(
+              tlSeen.get(name)
+            )}"><i></i>${escapeHtml(name)}</span>`
+        )
+        .join("");
+      const timelineHtml = `<div class="north-caltab-board-card north-caltab-board-timeline">
+            ${this._boardCardHead(
+              "tl",
+              "类型时间轴",
+              tlWin.period,
+              tlWin.label,
+              tlTotalMin ? `合计 <b>${this._fmtDurShort(tlTotalMin)}</b>` : "",
+              {
+                /* 单日才给「今天」—— 周 / 月两档是整段的读法，跳回某一天没有意义 */
+                pills: ["day", "week", "month"],
+                extra:
+                  tlWin.period === "day"
+                    ? `<button class="north-caltab-board-todaymini" type="button" data-bcard-today="tl" data-tip="看今天">今</button>`
+                    : "",
+              }
+            )}
+            ${
+              tlSeen.size
+                ? `<div class="north-caltab-board-tllegend">${tlLegend}</div>
+                   <div class="north-caltab-board-tlrows">${tlRowHtml}</div>
+                   <div class="north-caltab-board-tlaxis${
+                     tlMulti ? " is-indent" : ""
+                   }">${tlTicks.join("")}</div>`
+                : `<div class="north-caltab-board-empty">这一段还没有带时间的记录。</div>`
+            }
+        </div>`;
+
+      /* —— ③‴ 类型时长汇总：这一段里各类型累计多久，一行一条横杆 ——
+         横杆按当期最长的那条归一，条右端直接写时长（`4h31m`），
+         下方一条 0h 起的刻度带 —— 与参考图那张「各大类时长汇总」同款读法。
+         空杆（0 分钟）不占行：只记录的类型本来就不参与时长口径。
+         周期由卡头那颗 pill 决定，默认跟着工作台那段滚动的一年。 */
+      const durPeriod = this._calTabBoardDurPeriod || "board";
+      const durWin = this._boardCardWindow(
+        durPeriod,
+        this._calTabBoardDurAnchor
+      );
+      const durMinutes = this._statsTypeDurations(
+        recsIn(durWin.from, durWin.to)
+      ).minutes;
+      const durRows = Array.from(durMinutes.keys())
+        .map((name) => ({
+          name,
+          min: durMinutes.get(name) || 0,
+          color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+        }))
+        .filter((t) => t.min > 0)
+        .sort((a, b) => b.min - a.min);
+      const durTotalMin = durRows.reduce((s, t) => s + t.min, 0);
+      /* 刻度上限取「好看的整数小时」：先按最长那条定出大致的量级，
+         再从这串步长里挑一个能让刻度不超过 5 条的 */
+      const durMaxH = Math.max(1, Math.ceil((durRows[0] ? durRows[0].min : 0) / 60));
+      const durStepList = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168, 336, 720, 1440];
+      const durStep = durStepList.find((s) => durMaxH / s <= 5) || 1440;
+      let durAxisMax = Math.max(durStep, Math.ceil(durMaxH / durStep) * durStep);
+      /* 时长写在条的**外面**（右端外侧），所以最长那条得留出写字的空档：
+         顶到 88% 以上就再放大一档刻度。宁可右边空一格，也别让数字探出卡片。 */
+      const durPeak = durRows.length ? durRows[0].min : 0;
+      if (durPeak / (durAxisMax * 60) > 0.88) durAxisMax += durStep;
+      const durSpan = durAxisMax * 60;
+      /* 刻度位置：从 0 到轴顶等间隔一档，底部那排刻度按它定位。
+         （曾经还铺过一层同样位置的**竖网格线**，后来去掉了 ——
+         有底下一排刻度就够读尺度，竖线只会让整块看着像表格。） */
+      const durTicks = [];
+      for (let h = 0; h <= durAxisMax; h += durStep) {
+        durTicks.push({ h, pct: (h / durAxisMax) * 100 });
+      }
+      /* 刻度单位：轴不长时一律用小时；轴长到两天以上、且这一格正好整天时才换「天」。
+         注意**不能**简单地写 `h < 24 ? 小时 : 天` —— 加到 30h 的轴会印出「1.25天」
+         这种读不通的刻度。0 那一格永远写 0h（否则会变成「0天」）。 */
+      const durTickText = (h) => {
+        if (h === 0) return "0h";
+        if (h % 24 === 0 && durAxisMax >= 48) return `${h / 24}天`;
+        return `${h}h`;
+      };
+      const durAxisLabels = durTicks
+        .map(
+          (t) =>
+            `<span class="north-caltab-board-duraxis-lab" style="left:${t.pct.toFixed(
+              3
+            )}%">${durTickText(t.h)}</span>`
+        )
+        .join("");
+      /* 名字列宽按当期最长的类型名算（中文按全宽、拉丁按 0.55 估）——
+         所有行共用同一个宽度，条形才都从同一条竖线上起步。
+         这个值同时喂给 CSS 的 --dur-namew，竖网格线 / 坐标轴的左侧空档
+         都由它推出来，三处永远对齐。 */
+      const durNameUnits = Math.max(
+        1,
+        ...durRows.map((t) =>
+          [...t.name].reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 1 : 0.55), 0)
+        )
+      );
+      const durNameW = Math.ceil(durNameUnits * 12.5) + 2;
+      /* 一行 = 名字 + 条形区。条形区里条自左端起画，时长贴在条尾外侧。
+         行上**不带任何底色**（连行号 / 类型色都不需要）：这一块的主角是条，
+         行只是它的容器 —— 加底色会把整块切成一格一格的表格。
+         整块最后只剩「名字 + 条 + 数值 + 底下一排刻度」，别的都别加。 */
+      const durBarRows = durRows
+        .map((t) => {
+          const pct = Math.min(100, (t.min / durSpan) * 100);
+          /* 兜底：万一某条还是顶到了右端（刻度放大也追不上时），把时长挪进条里 */
+          const inside = pct > 92;
+          return `<div class="north-caltab-board-durrow" data-tip="${escapeHtml(
+            `${t.name} · 累计 ${this._fmtStatsDur(t.min)}`
+          )}">
+                <span class="north-caltab-board-durname">${escapeHtml(t.name)}</span>
+                <div class="north-caltab-board-durplot">
+                    <i class="north-caltab-board-durbar" style="width:${pct.toFixed(
+                      2
+                    )}%;background:${escapeHtml(t.color)}"></i>
+                    <span class="north-caltab-board-durval${
+                      inside ? " is-inside" : ""
+                    }" style="left:${pct.toFixed(2)}%">${this._fmtDurShort(t.min)}</span>
+                </div>
+            </div>`;
+        })
+        .join("");
+      const durationHtml = `<div class="north-caltab-board-card north-caltab-board-durs">
+            ${this._boardCardHead(
+              "dur",
+              "类型时长汇总",
+              durWin.period,
+              durWin.label,
+              durTotalMin ? `合计 <b>${this._fmtDurShort(durTotalMin)}</b>` : ""
+            )}
+            ${
+              durRows.length
+                ? `<div class="north-caltab-board-durchart" style="--dur-namew:${durNameW}px">
+                    <div class="north-caltab-board-durrows">${durBarRows}</div>
+                    <div class="north-caltab-board-duraxis"><span class="north-caltab-board-duraxis-gap"></span><div class="north-caltab-board-duraxis-track">${durAxisLabels}</div></div>
+                   </div>`
+                : `<div class="north-caltab-board-empty">这段区间里还没有能算出时长的记录。</div>`
+            }
+        </div>`;
+
+      /* —— ④ 指标走势：挑中的指标各一张小折线（复用指标视图那套成图） —— */
+      /* 指标固定读「记录」那份数据（不看日历数据源设置），顶栏类型筛选照常管用 ——
+         与指标视图同一套口径，这样两处的曲线对得上。 */
+      const metrics = this._metrics();
+      const metricRecords = picked && picked.size
+        ? this._metricRecords().filter((r) =>
+            picked.has(String((r && r.type) || "").trim())
+          )
+        : this._metricRecords();
+      const metricWindow = win;
+      this._boardChartCache = new Map();
+      let boardMetricHtml;
+      if (!metrics.length) {
+        boardMetricHtml = `<div class="north-caltab-board-empty">还没有指标。去「设置 → 指标设置」里建一个，这里就会长出一条曲线。</div>`;
+      } else {
+        let seq = 0;
+        boardMetricHtml = metrics
+          .slice(0, 6)
+          .map((x) => {
+            const metric = x.metric;
+            const series = this._metricSeries(metricRecords, metric, metricWindow);
+            const points = series.lines.reduce(
+              (n, l) => n + l.points.length,
+              0
+            );
+            let lastPoint = null;
+            series.lines.forEach((l) => {
+              const p = l.points[l.points.length - 1];
+              if (p && (!lastPoint || p.key > lastPoint.key)) lastPoint = p;
+            });
+            const cacheKey = `b${seq++}`;
+            if (points) this._boardChartCache.set(cacheKey, { metric, series });
+            return `<div class="north-caltab-board-metric">
+                <div class="north-caltab-board-metric-head">
+                    <span class="north-caltab-board-metric-dot" style="background:${escapeHtml(
+                      metric.color
+                    )}"></span>
+                    <span class="north-caltab-board-metric-name">${escapeHtml(
+                      metric.name
+                    )}</span>
+                    <span class="north-caltab-board-metric-last">${
+                      lastPoint
+                        ? `${Number(lastPoint.value).toFixed(metric.decimals)}${
+                            metric.unit ? " " + escapeHtml(metric.unit) : ""
+                          }`
+                        : "暂无数据"
+                    }</span>
+                </div>
+                ${
+                  points
+                    ? `<div class="north-caltab-board-chartbox" data-caltab-board-chart="${cacheKey}"></div>`
+                    : `<div class="north-caltab-board-metric-none">这段区间里没找到数值</div>`
+                }
+            </div>`;
+          })
+          .join("");
+      }
+      const metricHtml = `<div class="north-caltab-board-card north-caltab-board-metrics">
+            <div class="north-caltab-board-cardhead"><span class="north-caltab-board-cardtitle">指标走势</span><span class="north-caltab-board-cardsub">${
+              metrics.length
+                ? this._metricRangeLabel(metricWindow.from, metricWindow.to)
+                : ""
+            }</span></div>
+            <div class="north-caltab-board-metricgrid">${boardMetricHtml}</div>
+        </div>`;
+
+      /* 页内分类栏：照 pinch 的 .stats-tabs 那套（胶囊 + 选中反色）。
+         用的是**普通按钮 + role=tab**，不是思源顶栏那组段位 —— 它管的是
+         "这一屏铺哪几张卡"，与顶栏"看哪个视图"是两件事，别混。
+         横向溢出时可滚（分类以后变多也不会挤爆），滚动条藏起来。 */
+      const tabsHtml = `<nav class="north-caltab-board-tabs" role="tablist" aria-label="工作台分类">${BOARD_TABS.map(
+        (t) =>
+          `<button type="button" role="tab" aria-selected="${
+            t.value === tab
+          }" class="${t.value === tab ? "active" : ""}" data-board-tab="${t.value}">${t.label}</button>`
+      ).join("")}</nav>`;
+
+      /* 块代号 → 算好的 HTML。**每个块在这里只有一处出口**，
+         所以不存在"定义了却忘了铺出去"这种静默消失（上一个版本就栽在这上面）。
+         键必须与 BOARD_TABS 里写的完全一致 —— 有单测逐个核对。 */
+      /* 键必须与 BOARD_TABS 里的代号**一一对应且全表唯一** ——
+         这里是对象字面量：写重了不会报错，后一个会把前一个悄悄吃掉。
+         （习惯那张「趋势 + 环比」= trendDelta；记录那张「每日走势」= trendLine。） */
+      const blockHtml = {
+        trendDelta: trendHtml,
+        habitGrid: habitHtml,
+        cards: stats.cards,
+        recHeat: stats.heatSection,
+        daily: stats.dailySection,
+        dist: stats.distSection,
+        detail: stats.detailSection,
+        trendLine: stats.trendSection,
+        typeDist: stats.typeSection,
+        timeline: timelineHtml,
+        duration: durationHtml,
+        metric: metricHtml,
+      };
+      /* 铺的顺序**取自 BOARD_TABS 里该分类的 blocks**，不在这里写死 ——
+         以后调顺序 / 增删块只改常量一处，不会出现"表里改了、渲染没跟上"。
+         唯一的例外是「习惯」那两张：套一层 .north-caltab-board-grid
+         （与原来一样整行铺开、上下两张）。 */
+      let boardBody = tabBlocks.map((k) => blockHtml[k] || "").join("");
+      if (tab === "habit") {
+        boardBody = `<div class="north-caltab-board-grid">${boardBody}</div>`;
+      }
+
+      /* 今日进度放在胶囊**上面**：它是这一屏的常驻页头（说"今天"），
+         切分类时它不动，动的是它下面那一组卡。 */
+      return `<div class="north-caltab-board">
+            ${progressHtml}
+            ${tabsHtml}
+            ${boardBody}
+        </div>`;
+    }
+
+    /* 工作台里的折线按每张小卡的真实宽度成图（与指标视图 _fitMetricCharts 同理：
+       SVG 字号跟着 viewBox 缩放，宽度写死就会一会儿太小一会儿太大）。 */
+    _fitBoardCharts(container) {
+      if (!container || !this._boardChartCache) return;
+      const boxes = container.querySelectorAll("[data-caltab-board-chart]");
+      boxes.forEach((box) => {
+        const hit = this._boardChartCache.get(
+          box.getAttribute("data-caltab-board-chart") || ""
+        );
+        if (!hit) return;
+        const draw = () => {
+          const w = Math.round(box.clientWidth || 0);
+          const width = w > 0 ? w : 460;
+          if (box._boardW === width && box.firstChild) return;
+          box._boardW = width;
+          box.innerHTML = this._metricChartSvg(hit.series, hit.metric, width);
+        };
+        draw();
+        if (typeof ResizeObserver === "function" && box._boardRO !== true) {
+          box._boardRO = true;
+          const ro = new ResizeObserver(() => {
+            if (!box.isConnected) {
+              ro.disconnect();
+              return;
+            }
+            draw();
+          });
+          ro.observe(box);
+        }
+      });
+    }
+
     /* 习惯视图主体：顶部「今日完成 x / y」+ 进度条，然后一个习惯一张卡，
        最后一条**共用**的等级说明（几个习惯都是「合计时长」分级，说明一条就够）。
        视图自己带一组周期段位（日 / 周 / 月 / 年 / 范围）：年是原来的整年热力，
@@ -8144,6 +10307,7 @@
 
       if (!types.length) {
         return `<div class="north-caltab-habit">
+                ${toolbarHtml}
                 <div class="north-caltab-habit-empty">
                     <div class="north-caltab-habit-empty-title">还没有设置习惯</div>
                     <div class="north-caltab-habit-empty-desc">去「设置 → 习惯设置」里点几个记录类型，挑中的类型会在这里一个类型一张卡地追踪。</div>
@@ -8972,6 +11136,7 @@
                 } <b>${doneCount}</b> / ${types.length}</span>
                 <div class="north-caltab-habit-sum-track"><i style="width:${pct}%"></i></div>
             </div>
+            ${this._habitChainSectionHtml()}
             ${bodyHtml}
         </div>`;
     }
@@ -9551,6 +11716,10 @@
        data.calTabViews 只记「显式关掉」的视图；没记过的一律按显示算 ——
        新段位、老用户、写坏的数据都自然落到「显示」这个默认上。 */
     _calViewOn(key) {
+      /* 已经退役的段位（如合并前的 stats）一律当作「关着」——
+         老存档里留着的 calTabViews.stats 因此自然失效，
+         正在看它、或程序化跳过去，都会由 _calPickView() 兜底落到可用段位 */
+      if (CAL_TAB_VIEWS.indexOf(key) < 0) return false;
       const m = this.data && this.data.calTabViews;
       return !(m && typeof m === "object" && m[key] === false);
     }
@@ -9600,16 +11769,22 @@
       const isTable = view === "table";
       /* 习惯视图：挑中的类型一个一张卡 + 一整年的格子（数据用全量记录） */
       const isHabit = view === "habit";
-      const isStats = view === "stats";
+      /* 工作台视图：合并后唯一的「总览」段位，从上往下三组 ——
+         今天（今日进度）/ 习惯（完成热力 + 打卡点阵）/ 记录统计（原先「统计」
+         段位那一整套），末尾接类型时间轴与指标走势。
+         数据口径全部沿用习惯 / 指标 / 记录已有的，不在这里另算一套。 */
+      const isBoard = view === "board";
       /* 指标视图：指标（从记录内容里抽出来的数值）一张卡一条线。
          它另有一排「查看范围」段位（近 30/90 天…），但顶栏那组**不隐藏**：
            翻页 / 今天 —— 平移指标窗口（锚点就是窗口右端，见 _metricWindow）；
            类型筛选   —— 只统计选中类型的记录。
          两者都在这一屏里真管用，藏起来反而像坏了。 */
       const isMetric = view === "metric";
-      /* 统计视图的周期状态：首次进入给默认值（按年，标题即「N 年」），
-         与 Dock 统计互不干扰 */
-      if (isStats) {
+      /* 「记录统计」那套区块的周期状态：首次进入给默认值（按年，标题即「N 年」），
+         与 Dock 统计互不干扰。合并后由工作台承载，所以跟着 isBoard 初始化。
+         工作台那段滚动的一年（_boardWindow）也锚在同一个锚点上 ——
+         一屏里只该有一个周期，否则按了翻页会有区块没跟着动。 */
+      if (isBoard) {
         if (!this._calTabStatsPeriod) this._calTabStatsPeriod = "year";
         if (!(this._calTabStatsAnchor instanceof Date)) {
           this._calTabStatsAnchor = new Date();
@@ -9629,12 +11804,6 @@
       /* 标题：月视图给年月，时间轴视图给这一段的起止日期，统计视图给周期起止，
          表格视图给「年月 · N 条记录」（当月一共多少条，扫一眼就有数） */
       let title = `${monthAnchor.getFullYear()}年${monthAnchor.getMonth() + 1}月`;
-      if (isStats) {
-        title = this._computeLifeLogDockPeriod(
-          this._calTabStatsPeriod,
-          this._calTabStatsAnchor
-        ).label;
-      }
       /* 表格的身体先算：标题里的条数就是它数出来的，算两次容易两边不一致 */
       const table = isTable
         ? this._buildCalendarTableHtml(byDate, monthAnchor)
@@ -9680,9 +11849,7 @@
       /* 月视图才需要算三个月的格子（126 格，每格都要算农历 / 节气），
          时间轴视图下这活儿纯属白干，所以放进分支里 */
       let body = "";
-      if (isStats) {
-        body = this._buildCalendarStatsHtml();
-      } else if (isMetric) {
+      if (isMetric) {
         body = this._buildCalendarMetricHtml();
         /* 标题与习惯视图同一个写法：先给这一段日期，再给「N 个指标」
            （表格视图是「年月 · N 条记录」，同一套节奏）。 */
@@ -9693,6 +11860,18 @@
         }`;
       } else if (isTable) {
         body = table.html;
+      } else if (isBoard) {
+        /* 工作台：一屏总览。数据全走习惯 / 指标 / 记录已有的口径，
+           「看哪一段」由 _calTabStatsPeriod + _calTabStatsAnchor 统一决定
+           （顶栏翻页挪锚点，与合并前的统计视图同一套）。
+           标题用这一套周期的标签（「2026 年」）—— 页面上记录统计占了大半，
+           而且它就是顶栏翻页的步长；工作台那段滚动的一年也锚在同一个锚点上，
+           不再出现「标题写一段、翻页挪另一段」的两套语义。 */
+        body = this._buildHabitBoardHtml();
+        title = `${this._computeLifeLogDockPeriod(
+          this._calTabStatsPeriod,
+          this._calTabStatsAnchor
+        ).label} · 工作台`;
       } else if (isHabit) {
         body = this._buildCalendarHabitHtml(habitYear);
       } else if (isTimeline) {
@@ -9832,8 +12011,8 @@
                     <button class="north-caltab-typebtn${
                       typeFilterOn || typeMenuOpen ? " active" : ""
                     }" data-caltab-act="types" data-tip="按类型筛选">${escapeHtml(
-        this._calTabFilterLabel()
-      )}</button>
+                        this._calTabFilterLabel()
+                      )}</button>
                     <div class="north-caltab-typemenu${typeMenuOpen ? " open" : ""}">${typeMenuHtml}</div>
                 </div>
                 <div class="north-caltab-navgroup">
@@ -9888,6 +12067,8 @@
 
       /* 指标段位：整屏已经插好，按每张卡的真实宽度逐张成图（原因见 _fitMetricCharts） */
       if (isMetric) this._fitMetricCharts(container);
+      /* 习惯工作台：折线同样要等插进 DOM、量到真实宽度之后再成图 */
+      if (isBoard) this._fitBoardCharts(container);
 
       /* 时间轴视图：进来先滚到早上 7 点 —— 活动基本都在白天，从 00:00 起
          要往下滚很久才看得到东西。表头在滚动容器之外，不会跟着滚走。
@@ -10265,6 +12446,69 @@
         /* —— 表格视图工具行：筛选面板开合 / 面板里的 chips / 清除 / 清空搜索。
            类型 chips 写的是共用的 _calTabTypeFilter（与工具栏那份同步），
            时间 chips 是单选（再点一次选中的就回到「全部」）。 —— */
+        /* —— 工作台三张「类型」卡的卡头控件：周期 pill / 翻页 / 「今」。
+           与统计视图「时长统计」那套局部周期同款：切换只换粒度、翻页只挪
+           这张卡自己的锚点，互不干扰，也不碰顶栏那段窗口。 —— */
+        /* —— 工作台的页内分类 ——
+           只改内存状态再重绘，不落盘：切分类是最频繁的交互，不该每次都写盘。
+           重绘后 _fitBoardCharts 会照着新的 chartbox 重新成图，
+           所以切到「指标」那张折线当场就是对的宽度，不用等第二次重绘。 */
+        const boardTab =
+          e.target.closest && e.target.closest("[data-board-tab]");
+        if (boardTab) {
+          const v = boardTab.dataset.boardTab || "";
+          if (BOARD_TAB_VALUES.indexOf(v) >= 0 && v !== this._calTabBoardTab) {
+            this._calTabBoardTab = v;
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        const bcardPeriod =
+          e.target.closest && e.target.closest("[data-bcard-period]");
+        if (bcardPeriod) {
+          const raw = bcardPeriod.dataset.bcardPeriod || "";
+          const i = raw.indexOf(":");
+          if (i > 0) {
+            this._boardCardSetPeriod(raw.slice(0, i), raw.slice(i + 1));
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        const bcardNav = e.target.closest && e.target.closest("[data-bcard-nav]");
+        if (bcardNav) {
+          const raw = bcardNav.dataset.bcardNav || "";
+          const i = raw.indexOf(":");
+          if (i > 0) {
+            this._boardCardStep(raw.slice(0, i), raw.slice(i + 1) === "next" ? 1 : -1);
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        const bcardToday =
+          e.target.closest && e.target.closest("[data-bcard-today]");
+        if (bcardToday) {
+          /* 「今」：把这张卡拉回「今天」——
+             时间轴回到今天那一天的日视图，其余两张卡回到各自的默认周期。
+             复位的落点统一走 _boardCardReset（默认值只有一处）。 */
+          const scope = bcardToday.dataset.bcardToday || "";
+          if (scope === "tl") {
+            /* 这张卡默认就是「跟工作台窗口的右端走」，所以要让它在**今天**，
+               最自然的做法是把窗口右端也放回今天 —— 不然会出现
+               「时间轴是今天、热力图还停在上个月」这种同一屏对不上的状态。
+               换句话说：这一颗就是「这一屏回今天」的快捷方式。 */
+            this._calTabStatsAnchor = new Date();
+            this._calTabBoardDay = null;
+            this._boardCardReset("tl");
+          } else {
+            this._calTabBoardDay = null;
+            /* 时长汇总的默认周期是「月」不是「近一年」——
+               它算的是"这段时间各类型各花了多久"，按年看每行几百小时、
+               长短差异被压平（这个字面量别再写死成 "board"）。 */
+            this._boardCardReset(scope);
+          }
+          this._paintCalendarTab(container);
+          return;
+        }
         if (
           e.target.closest &&
           e.target.closest(".north-caltab-filterbtn")
@@ -10477,6 +12721,66 @@
         }
         /* 习惯分组卡 / 节头：展开或收起该分组。状态落盘（habitGroupExpanded），
            下次回来保持；重绘整个标签页让卡片与节两种形态即时切换 */
+        /* —— 习惯关系图（前置习惯）——
+           四件事：展开 / 收起（落盘）、进出编辑模式、选中一张卡、给选中的卡
+           勾 / 取消一个前置习惯。都只改状态再重绘，DOM 全是现画的。 —— */
+        const chainToggle =
+          e.target.closest && e.target.closest("[data-caltab-chaintoggle]");
+        if (chainToggle) {
+          this.data.habitChainOpen = !this._habitChainOpen();
+          this._persist("保存习惯关系图展开");
+          this._paintCalendarTab(container);
+          return;
+        }
+        const chainEditBtn =
+          e.target.closest && e.target.closest("[data-caltab-chainedit]");
+        if (chainEditBtn) {
+          this._calTabChainEdit = !this._calTabChainEdit;
+          if (!this._calTabChainEdit) this._calTabChainPick = "";
+          this._paintCalendarTab(container);
+          return;
+        }
+        /* 选卡：编辑模式下点一张卡 = 选中它（再点一次取消）；非编辑模式下
+           点卡不动状态 —— 图是「看」的，选中态只在编辑时才有意义。 */
+        const chainPick =
+          e.target.closest && e.target.closest("[data-caltab-chainpick]");
+        if (chainPick) {
+          if (this._calTabChainEdit) {
+            const t = chainPick.dataset.caltabChainpick || "";
+            this._calTabChainPick = this._calTabChainPick === t ? "" : t;
+            this._paintCalendarTab(container);
+          }
+          return;
+        }
+        /* 勾 / 取消一个前置习惯 */
+        const chainCand =
+          e.target.closest && e.target.closest("[data-caltab-chaincand]");
+        if (chainCand) {
+          const target = chainCand.dataset.caltabChaintarget || "";
+          const cand = chainCand.dataset.caltabChaincand || "";
+          const res = this._habitTogglePre(target, cand);
+          if (res === "cycle") {
+            showMessage(`${NAME}：这么连会让关系绕回自己，换一个吧`);
+          } else if (res === "added" || res === "removed") {
+            const cfg = this._habitConfig(target);
+            showMessage(
+              `${NAME}：${cfg.alias || target} ${
+                res === "added" ? "的前置习惯已加上" : "的前置习惯已去掉"
+              }`
+            );
+          }
+          this._paintCalendarTab(container);
+          return;
+        }
+        /* 清空某个习惯的全部前置关系 */
+        const chainClear =
+          e.target.closest && e.target.closest("[data-caltab-chainclear]");
+        if (chainClear) {
+          const target = chainClear.dataset.caltabChainclear || "";
+          if (target) this._habitSetPre(target, []);
+          this._paintCalendarTab(container);
+          return;
+        }
         const grpToggle =
           e.target.closest && e.target.closest("[data-habitgrp-toggle]");
         if (grpToggle) {
@@ -10558,33 +12862,12 @@
           }
           return;
         }
-        /* 时长统计：局部周期切换（锚点回到今天）与翻页，独立于整页周期 */
-        const durPeriodBtn = e.target.closest && e.target.closest("[data-caltab-durperiod]");
-        if (durPeriodBtn) {
-          const p = durPeriodBtn.dataset.caltabDurperiod;
-          if (["day", "week", "month", "year"].indexOf(p) >= 0) {
-            this._calTabDurPeriod = p;
-            this._calTabDurAnchor = new Date();
-            this._paintCalendarTab(container);
-          }
-          return;
-        }
-        const durNavBtn = e.target.closest && e.target.closest("[data-caltab-durnav]");
-        if (durNavBtn) {
-          const dir = durNavBtn.dataset.caltabDurnav === "next" ? 1 : -1;
-          const p = this._calTabDurPeriod || "month";
-          const a = new Date(
-            this._calTabDurAnchor instanceof Date ? this._calTabDurAnchor : new Date()
-          );
-          if (p === "day") a.setDate(a.getDate() + dir);
-          else if (p === "month") a.setMonth(a.getMonth() + dir);
-          else if (p === "year") a.setFullYear(a.getFullYear() + dir);
-          else a.setDate(a.getDate() + 7 * dir);
-          this._calTabDurAnchor = a;
-          this._paintCalendarTab(container);
-          return;
-        }
-        /* 类型分布：局部周期切换（锚点回到今天）与翻页 —— 与时长统计同款 */
+        /* 类型分布：局部周期切换（锚点回到今天）与翻页。
+           注意它**保留了自己的小周期**（与合并时长统计之前一样）——
+           那一块看的是「某个日 / 周 / 月 / 年里各类型的占比」，
+           与页面周期是两件事，所以给它自己一套锚点是有意的。
+           （原「时长统计」那一套同理，已随那段区块一起并掉，
+           时长口径现在统一走工作台那张卡，见 _buildStatsParts 的说明。） */
         const typePeriodBtn = e.target.closest && e.target.closest("[data-caltab-typeperiod]");
         if (typePeriodBtn) {
           const p = typePeriodBtn.dataset.caltabTypeperiod;
@@ -10615,9 +12898,17 @@
         if (btn) {
           const act = btn.dataset.caltabAct;
           if (act === "today") {
-            /* 统计视图的「今天」：回到当前周期 */
-            if (this._calTabView === "stats") {
+            /* 工作台（合并后的总览段位）的「今天」：周期锚点回到今天 ——
+               「过去一年」那张热力图、分布、走势、指标都锚在它上面，一起回来。
+               这是这一屏的「全部复位」：只复位一半会留下「窗口回今天了、
+               卡还停在上个月」这种对不上的状态。 */
+            if (this._calTabView === "board") {
               this._calTabStatsAnchor = new Date();
+              this._calTabBoardDay = null;
+              /* 每张卡各回**自己**的默认周期（时长汇总 = 月 / 时间轴 = 日，
+                 见 BOARD_CARD_PERIOD_DEFAULT）。别再在这里写死字面量 —— 那样改了默认值就会漏掉这一处。 */
+              this._boardCardReset("dur");
+              this._boardCardReset("tl");
               this._paintCalendarTab(container);
               return;
             }
@@ -10662,6 +12953,36 @@
           if (act === "settings") {
             /* 按钮上写了 data-settings-group 的（如指标空态）直接落到那个分区 */
             this._openSettingsModal(btn.dataset.settingsGroup || "");
+            return;
+          }
+          /* 工作台上的「打开今天的日记」：与「打开今日日记」同一个入口 */
+          if (act === "todaydiary") {
+            this._openDailyNote();
+            return;
+          }
+          /* 工作台热力图上的某一格：把「类型时间轴」钉在那一天（点「今天」清掉）。
+             热力图本身是「哪几天有记录」的密度图，钉住一天正好补上「那天怎么过的」，
+             两处读数因此连得起来；再点同一格 = 取消钉住，回到窗口右端。 */
+          if (act === "boardday") {
+            const key = btn.dataset.caltabDay || "";
+            if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+              this._calTabBoardDay = this._calTabBoardDay === key ? null : key;
+              /* 点格子 = 想看那一天，时间轴顺手切回「日」这一档，
+                 否则它在「周 / 月」档上，点了格子什么也看不出来。
+                 这里的 "day" **不是"默认值"**（默认值在 BOARD_CARD_PERIOD_DEFAULT），
+                 而是"你点了一天、就看那一天"的语义 —— 所以它不该走 _boardCardReset。 */
+              if (this._calTabBoardDay) {
+                this._calTabBoardTlPeriod = "day";
+                this._calTabBoardTlAnchor = null;
+              }
+              this._paintCalendarTab(container);
+            }
+            return;
+          }
+          if (act === "boarddayclear") {
+            this._calTabBoardDay = null;
+            this._calTabBoardTlAnchor = null;
+            this._paintCalendarTab(container);
             return;
           }
           /* 习惯视图按当前周期翻：日 ±1 天、周 ±7 天、月 ±1 月、年 ±1 年；
@@ -10731,14 +13052,18 @@
             this._paintCalendarTab(container);
             return;
           }
-          /* 统计视图的翻页：挪统计周期的锚点（不碰日历焦点日） */
-          if (this._calTabView === "stats") {
+          /* 工作台（合并后的总览段位）的翻页：挪「记录统计」那套周期的锚点
+             （不碰日历焦点日）。工作台那段滚动的一年也锚在同一个锚点上，
+             所以热力图 / 打卡点阵 / 分布 / 走势会一起跟着动 —— 一屏一个周期。 */
+          if (this._calTabView === "board") {
             const a = new Date(
               this._calTabStatsAnchor instanceof Date ? this._calTabStatsAnchor : new Date()
             );
             const dir = act === "next" ? 1 : -1;
             const p = this._calTabStatsPeriod || "year";
-            if (p === "week") a.setDate(a.getDate() + 7 * dir);
+            /* 四档都要有对应步长：少了「日」这一档，周期是「日」时按一下会跳一个月 */
+            if (p === "day") a.setDate(a.getDate() + dir);
+            else if (p === "week") a.setDate(a.getDate() + 7 * dir);
             else if (p === "year") a.setFullYear(a.getFullYear() + dir);
             else a.setMonth(a.getMonth() + dir);
             this._calTabStatsAnchor = a;

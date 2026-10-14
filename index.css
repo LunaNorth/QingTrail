@@ -1,4 +1,4 @@
-.tt-settings {
+﻿.tt-settings {
   display: flex;
   flex-direction: column;
 }
@@ -2595,24 +2595,59 @@
      往 on-background 走就回到「正文黑」（对比度 12 以上），58% 落在 5.5~7 之间。
      要整体调标题轻重只改这一个数（写大 = 更靠近 on-surface = 更轻）。 */
   --tt-ink-title: color-mix(in srgb, var(--b3-theme-on-surface) 58%, var(--b3-theme-on-background));
+  /* 外层的横向 / 顶部内边距。提成变量是因为顶栏要粘顶（见 .north-caltab-bar）：
+     它得用一对等值的负外边距把盒子撑到容器边缘，两处必须是同一个数，
+     写死两遍迟早会调一边忘一边。 */
+  --tt-caltab-pad-x: 20px;
+  --tt-caltab-pad-t: 16px;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
-  padding: 16px 20px 20px;
+  padding: var(--tt-caltab-pad-t) var(--tt-caltab-pad-x) 20px;
   background: var(--b3-theme-background);
   overflow-y: auto;
+  /* 滚动条藏掉：统计 / 工作台 / 指标 / 习惯这四个视图的内容直接铺在这个
+     外层容器里，滚动条就挂在容器右侧、贴着内容边 —— 与月历 / 时间轴 /
+     表格那几个内层滚动区（.north-caltab-scroll 等）的观感对不上。
+     这几处一律不画滚动条（滚轮、触控板、翻页按钮照常好使），
+     所以这一条只是把外层也收进同一套规矩里。 */
+  scrollbar-width: none;
+}
+.north-timetrail-caltab::-webkit-scrollbar {
+  display: none;
 }
 
 /* 工具栏：左年月标题、右侧「段位 + 翻月分组」。
    中间不放假东西 —— 靠段位上的 margin-left: auto 把右侧那一串整体推到最右，
-   自适应的空白就落在标题和段位之间。 */
+   自适应的空白就落在标题和段位之间。
+
+   粘顶：统计 / 工作台 / 指标 / 习惯这四个视图的内容直接铺在外层容器里，
+   **外层就是滚动容器**，所以顶栏以前会跟着内容一起滚走 —— 想切个视图
+   得先滚回顶上。改成 sticky 之后它钉在顶部不动。
+   （月历 / 时间轴 / 表格三个视图各有自己的内层滚动区，外层根本不滚，
+     这里的 sticky 对它们等于没写，行为一字不变。）
+
+   左右那对负 margin 是配外层左右 padding 用的：不加的话吸附时两边会
+   各留出 20px 的缝、内容从缝里透上来。负 margin 把盒子撑到容器边缘，
+   自己的 padding 再把间距补回来，所以静止时与原来完全一样。
+
+   顶上的吸附位置写 `top: -外层padding-top`：sticky 是按**外边距盒**贴边的，
+   顶栏又有等值的负 margin-top（同样为了撑到容器边缘），两者一叠，
+   边框盒正好落在滚动区顶端 —— 视觉上的 16px 间距由它自己的 padding-top
+   提供，滚上来的内容全被这层底色挡住，不会在顶上漏一条缝。
+   下面那 12px 也改成 padding-bottom 出，同样是为了吸附时不留透明缝。 */
 .north-caltab-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  position: sticky;
+  top: calc(var(--tt-caltab-pad-t) * -1);
+  z-index: 6;
+  margin: calc(var(--tt-caltab-pad-t) * -1) calc(var(--tt-caltab-pad-x) * -1) 0;
+  padding: var(--tt-caltab-pad-t) var(--tt-caltab-pad-x) 12px;
+  background: var(--b3-theme-background);
   flex-shrink: 0;
 }
 
@@ -4717,6 +4752,414 @@
   cursor: pointer;
 }
 
+/* ===================== 习惯关系图（前置习惯） =====================
+   需求：一个习惯总也养不成的时候，往回找它的**前置习惯** ——
+   先做阻力最小的那一步，目标习惯才立得住。
+
+   版式：一块白底淡边的大卡，卡头是标题 + 「编辑关系」；下面是一条
+   可横向滚动的画布，画布里节点绝对定位、连线是铺在下面的一层 SVG。
+
+   为什么卡片走绝对定位而不是 flex 网格：连线要精确落在卡片边缘的
+   中点上，网格布局里得靠 getBoundingClientRect 逐个量，一重绘就得再量一遍。
+   这里卡片等宽等高、列距固定（三个数都在 index.js 的 CHAIN_* 常量里），
+   坐标直接算出来 —— 于是**不需要二次成图**，几十张卡也只是几十个 div。
+
+   颜色：节点用类型色 --tt-c（头像、连线、悬停环都从它混出来），
+   「建议起点」用主色 —— 它是唯一的推荐，值得抢一点视线。 */
+.north-caltab-chain {
+  flex: 0 0 auto;
+  padding: 12px 16px 14px;
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+/* 收起态：只剩卡头那一行 */
+.north-caltab-chain.is-closed {
+  padding-bottom: 12px;
+}
+.north-caltab-chain-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.north-caltab-chain-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.north-caltab-chain-toggle:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+/* 收起时箭头转 90°：往右指 = 可以展开 */
+.north-caltab-chain.is-closed .north-caltab-chain-chev {
+  transform: rotate(-90deg);
+}
+.north-caltab-chain-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-chain-sub {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+/* 「编辑关系 / 完成编辑」：靠右，与卡头那排控件同一个位置 */
+.north-caltab-chain-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 80%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.north-caltab-chain-btn:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+/* 编辑中：主色淡底，一眼看出「现在点卡片是改关系，不是看数据」 */
+.north-caltab-chain-btn.on {
+  background: color-mix(in srgb, var(--b3-theme-primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 45%, transparent);
+  color: var(--b3-theme-primary);
+}
+
+/* 编辑面板：选中一张卡之后才长出那排候选习惯芯片 */
+.north-caltab-chain-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 10px;
+  padding: 8px 10px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-chain-plabel {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-chain-pchips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.north-caltab-chain-pnote {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 候选习惯芯片：没选 = 描边浅字，选了 = 类型色淡底 + 类型色字。
+   小圆点就是该习惯的类型色，跟卡片上的头像同一个色。 */
+.north-caltab-chain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 80%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--b3-theme-on-surface);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.north-caltab-chain-chip i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-chain-chip:hover {
+  background: var(--b3-list-hover);
+}
+.north-caltab-chain-chip.on {
+  border-color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 50%, transparent);
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 12%, transparent);
+  color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 70%, var(--b3-theme-on-background));
+}
+/* 会让关系绕回自己的那条：直接禁用（点上去什么也不会发生，比弹一句错话好懂） */
+.north-caltab-chain-chip.is-cycle {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+.north-caltab-chain-chip.is-cycle:hover {
+  background: transparent;
+}
+.north-caltab-chain-pclear {
+  margin-left: auto;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--b3-theme-error, #d23f31) 45%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-error, #d23f31);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.7;
+  cursor: pointer;
+}
+.north-caltab-chain-pclear:hover {
+  background: color-mix(in srgb, var(--b3-theme-error, #d23f31) 10%, transparent);
+}
+
+/* 画布：只在这里横向滚动（图宽了拖横条，卡片本身不压缩） */
+.north-caltab-chain-canvas {
+  margin-top: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.north-caltab-chain-canvas::-webkit-scrollbar {
+  height: 8px;
+}
+.north-caltab-chain-canvas::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 18%, transparent);
+}
+.north-caltab-chain-stage {
+  position: relative;
+}
+/* 连线层：铺在卡片下面，且不吃事件 —— 卡片该点点、该悬停悬停 */
+.north-caltab-chain-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+/* 线：类型色压到 55% 不透明 —— 图是背景关系，不该比卡片上的字还重。
+   fill: none 是必须的，否则 path 会被填成一坨。 */
+.north-caltab-chain-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--tt-c, #888888) 55%, transparent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.north-caltab-chain-arrow {
+  fill: color-mix(in srgb, var(--tt-c, #888888) 55%, transparent);
+  stroke: none;
+}
+/* 边的三态（默认那档就是上面的「通」）：
+   is-weak 前置达标、目标没跟上 —— 还是实线，但淡下去，代表「这一步没接上」；
+   is-cut  前置自己就没达标 —— 灰色虚线，且**不用类型色**（链条没走到的地方
+           本身就没有颜色），代表「链条还没走到这」。
+   弱 / 断都只是「读得出」，不是把关系抹掉：线还在，只是不再是亮的。 */
+.north-caltab-chain-line.is-weak {
+  stroke: color-mix(in srgb, var(--tt-c, #888888) 26%, transparent);
+}
+.north-caltab-chain-arrow.is-weak {
+  fill: color-mix(in srgb, var(--tt-c, #888888) 26%, transparent);
+}
+.north-caltab-chain-line.is-cut {
+  stroke: color-mix(in srgb, var(--b3-theme-on-background) 30%, transparent);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 5;
+}
+.north-caltab-chain-arrow.is-cut {
+  fill: color-mix(in srgb, var(--b3-theme-on-background) 30%, transparent);
+}
+
+/* 节点卡片：等宽等高（尺寸与 index.js 的 CHAIN_CARD_* 一一对应，
+   改这里就必须改那三个常量，否则连线端点会对不上） */
+.north-caltab-chain-card {
+  position: absolute;
+  width: 184px;
+  height: 86px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px 9px;
+  border-radius: 9px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 75%, transparent);
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+/* 只有编辑模式下卡片才可点选：默认光标是普通箭头，免得让人以为点了会怎样 */
+.north-caltab-chain.is-edit .north-caltab-chain-card {
+  cursor: pointer;
+}
+.north-caltab-chain-card:hover {
+  border-color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 45%, transparent);
+}
+/* 建议起点：只把边框换成主色 —— 整张图里唯一「被推荐」的那张卡。
+   之前这里还有一圈 2px 的主色淡环（box-shadow），用户要求去掉：
+   卡片网格贴得比较近，那圈环会在视觉上把卡片撑大、和旁边的卡不齐，
+   只留边框色一样读得出「这张被推荐」。 */
+.north-caltab-chain-card.is-best {
+  border-color: color-mix(in srgb, var(--b3-theme-primary) 55%, transparent);
+}
+/* ---- 节点三态：都只是「照实说」，不加锁、不隐藏 ----
+   is-ok   ：照常 —— 达标就是达标，所以这里**没有**规则；
+   is-miss ：中性灰 —— 这期还没达标，是「事实」不是「惩罚」：底色压成中性、
+             名字退到次级字色，但边框、数据、目标都还读得清（不是压暗成不可辨）；
+   is-wait ：最淡一档 —— 前置还没通（或开始日期还没到），先别管这个。
+   都只碰底色 / 字色 / 内容透明度，**不碰 border-color** —— 这样卡片的
+   悬停高亮、编辑选中环都照旧，状态和交互不会互相盖掉。 */
+.north-caltab-chain-card.is-miss {
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-on-background) 3%,
+    var(--b3-theme-background)
+  );
+}
+.north-caltab-chain-card.is-miss .north-caltab-chain-cname {
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-chain-card.is-wait {
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-on-background) 2%,
+    var(--b3-theme-background)
+  );
+  border-style: dashed;
+}
+.north-caltab-chain-card.is-wait .north-caltab-chain-chead,
+.north-caltab-chain-card.is-wait .north-caltab-chain-cmeta,
+.north-caltab-chain-card.is-wait .north-caltab-chain-cgoal {
+  opacity: 0.45;
+}
+/* 「当前卡点」：只把边框换成暖色 —— 「现在堵在这」不是「做错了」，
+   卡片不染红、不压暗（压暗会和 is-miss 打架）。写在 is-pick 之前，
+   编辑模式下选中的那张仍以主色环为准。 */
+.north-caltab-chain-card.is-block {
+  border-color: color-mix(in srgb, #e0a44a 60%, transparent);
+}
+
+/* ---- 维持成本档：卡片最左边那根 3px 竖条 ----
+   和节点状态（未达标 / 还没轮到）是**两个维度**，所以它不碰底色、不碰边框、
+   不碰任何文字的浓淡，只在最左边立一根条 —— 状态和档位绝不会互相盖掉。
+   没标注的习惯不画：--tt-cost-c 缺省是 transparent（规则仍匹配，但看不见）。
+   绿 = 机制 / 被动（设一次就不用管，硬支撑）· 青 = 半被动（挂在必然触发的锚点上）
+   · 灰 = 主动（每次都要自己扛，软支撑）。
+   灰色刻意用主题中性色、也刻意更淡：「主动」不是错，只是这条支撑随时会崩，
+   不该比绿条还抢眼。 */
+.north-caltab-chain-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--tt-cost-c, transparent);
+}
+.north-caltab-chain-card.is-cost-hard {
+  --tt-cost-c: #3fae7a;
+}
+.north-caltab-chain-card.is-cost-mid {
+  --tt-cost-c: #4fa8cf;
+}
+.north-caltab-chain-card.is-cost-soft {
+  --tt-cost-c: color-mix(in srgb, var(--b3-theme-on-background) 34%, transparent);
+}
+/* 编辑时选中的那张卡：实心主色环，与「建议起点」的淡环区分开 */
+.north-caltab-chain-card.is-pick {
+  border-color: var(--b3-theme-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--b3-theme-primary) 28%, transparent);
+}
+.north-caltab-chain-chead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.north-caltab-chain-cname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+/* 「起点 / 建议起点」小标 */
+.north-caltab-chain-badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 12%, transparent);
+  color: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 70%, var(--b3-theme-on-surface));
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.north-caltab-chain-badge.is-best {
+  background: color-mix(in srgb, var(--b3-theme-primary) 14%, transparent);
+  color: var(--b3-theme-primary);
+}
+/* 「当前卡点」用暖色，与「建议起点」的主色一眼分开：一个说从哪起步，
+   一个说现在堵在哪。暖色在浅色 / 深色主题下都读得清，所以直接写死一个琥珀色。 */
+.north-caltab-chain-badge.is-block {
+  background: color-mix(in srgb, #e0a44a 16%, transparent);
+  color: color-mix(in srgb, #e0a44a 78%, var(--b3-theme-on-background));
+}
+/* 卡片中间那行数据：连续 + 近 30 天完成率，数字加粗 */
+.north-caltab-chain-cmeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.north-caltab-chain-cmeta b {
+  color: var(--b3-theme-on-background);
+  font-weight: 600;
+}
+/* 目标那句话（每天 ≥ 1 次 / 每周 ≥ 3 天…）：卡片最底一行，长了一行省略 */
+.north-caltab-chain-cgoal {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 图下面那句话：一张图怎么读 / 还没有关系时怎么开始 */
+.north-caltab-chain-foot,
+.north-caltab-chain-note {
+  margin-top: 9px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-chain-note {
+  margin-top: 10px;
+}
+
 /* ===== 统计视图（第五段位）：版式参考 lumina 统计页 =====
    顶部是「周期概览」数字卡网格（不套框，直接铺在页面上），之后由一张张
    「卡片区块」纵排：区块头左标题、右副题、下有分隔线。区块依次为
@@ -6096,5 +6539,936 @@ textarea.north-caltab-edit-input {
   }
   .tt-metrics__item-row {
     flex-wrap: wrap;
+  }
+}
+
+/* ===================== 日历标签页 · 工作台视图 =====================
+   顶栏「统计」右边那个段位（参考图 1~6 的单屏浓缩版）：
+   今日进度 / 完成热力图 / 习惯打卡 / 指标走势。
+   配色沿用插件既有的一套 —— 类型色走 --tt-c（卡片 / 格子各自内联），
+   主色走 --b3-theme-primary；热力格与统计视图那张全年热力同一套分档色。 */
+
+/* 工作台外壳：与统计 / 指标视图同一套外层（外层 .north-timetrail-caltab
+   自己就是滚动容器，这里只做纵向排布 + 内边距） */
+.north-caltab-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px 2px 10px;
+}
+/* ---- 工作台的页内分类栏 ----
+   版式照 pinch 的 .stats-tabs：圆角胶囊、未选是淡底（list-hover）、
+   悬停浮出描边、**选中反过来**（底色 = 前景色、字色 = 背景色）——
+   深色主题下就是浅色实心胶囊、浅色主题下是深色实心胶囊，一眼看出现在铺的是哪一组。
+   与顶栏那组段位（.north-caltab-segments）刻意长得不一样：
+   顶栏管「看哪个视图」，这条管「这一屏铺哪几张卡」，两件事别混。
+   分类以后变多时横向可滚，滚动条藏掉（与 pinch 同款）。 */
+.north-caltab-board-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 1px 1px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.north-caltab-board-tabs::-webkit-scrollbar {
+  display: none;
+}
+.north-caltab-board-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.north-caltab-board-tabs > button:hover {
+  border-color: var(--b3-border-color);
+  background: var(--b3-theme-background);
+}
+/* 选中态用**主题色**（--b3-theme-primary / --b3-theme-on-primary），
+   而不是把"前景色反过来"当底（原来写的是 on-background 打底、background 当字）：
+   反色只跟着 on-background 走，主题把强调色换掉时它一点反应都没有，
+   换个主题就可能糊成一片灰。primary + on-primary 是每个主题都会定义、
+   且保证两者互相有对比的一对变量 —— 默认主题（daylight / midnight 都是 #3575f0 + #fff）
+   和 Neo 这类第三方主题下都会自动跟着主题色走。
+   本文件里 .north-lifelog-menu-item.active 用的也是这一对，保持一致。 */
+.north-caltab-board-tabs > button.active {
+  background: var(--b3-theme-primary);
+  border-color: var(--b3-theme-primary);
+  color: var(--b3-theme-on-primary, #fff);
+}
+
+.north-caltab-board-grid {
+  /* 热力图一行 53 周、打卡一行 30 天，都需要横向空间 —— 整行铺开
+     （与参考图 1 的「主页 / 热力图 / 打卡」自上而下同一种排法）。 */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* 工作台里的每张卡：白底淡边，与习惯卡 / 指标卡同一套写法 */
+.north-caltab-board-card {
+  padding: 14px 16px 15px;
+  border-radius: 10px;
+  background: var(--b3-theme-background);
+  border: 1px solid color-mix(in srgb, var(--b3-border-color) 60%, transparent);
+}
+.north-caltab-board-cardhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.north-caltab-board-cardtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-board-cardsub {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-cardsub b {
+  color: var(--b3-theme-primary);
+}
+.north-caltab-board-empty {
+  padding: 20px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* —— 三张「类型」卡的卡头控件 ——
+   与统计视图「时长统计」的区块头同一套读法：左标题，右侧依次为
+   周期 pill（近一年 / 日 / 周 / 月 / 年）、翻页（‹ 周期文字 ›）、合计。
+   pill 复用共用的 .north-caltab-segments（26px 高、选中白底浮起），
+   这里只把它的 margin-left:auto 收回来 —— 它在 .north-caltab-board-headctl
+   里只是这一串控件的第一项，靠右由整组负责。 */
+.north-caltab-board-cardhead-ctl {
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.north-caltab-board-headctl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.north-caltab-board-periods {
+  margin-left: 0;
+}
+/* 卡头的 pill 比主段位小一号：这一屏里它们是次级控件，不该跟顶栏抢戏 */
+.north-caltab-board-periods button {
+  height: 24px;
+  min-width: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.north-caltab-board-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.north-caltab-board-navbtn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-board-navbtn:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-board-navlabel {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+.north-caltab-board-total {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.north-caltab-board-total b {
+  color: var(--b3-theme-primary);
+}
+/* 时间轴卡头那枚「今」：只给单日这一档，点一下回到今天 */
+.north-caltab-board-todaymini {
+  height: 22px;
+  min-width: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-board-todaymini:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+
+/* —— ① 今日进度：左边问候 / 日期 / 习惯芯片，右边两条进度 + 打开日记 —— */
+.north-caltab-board-progress {
+  display: grid;
+  grid-template-columns: 1fr minmax(220px, 300px);
+  gap: 16px 24px;
+  align-items: center;
+}
+.north-caltab-board-greet {
+  font-size: 12px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-date {
+  margin: 2px 0 2px;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-sub {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.north-caltab-board-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--b3-theme-surface);
+  color: var(--b3-theme-on-surface);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.north-caltab-board-chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-board-chip.is-off {
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-prog-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.north-caltab-board-bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: baseline;
+}
+.north-caltab-board-bar-lab {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-board-bar-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-track {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 8%, transparent);
+  overflow: hidden;
+}
+.north-caltab-board-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--b3-theme-primary);
+  transition: width 0.2s ease;
+}
+.north-caltab-board-diary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  margin-top: 2px;
+  border: none;
+  border-radius: 8px;
+  background: var(--b3-theme-primary);
+  color: var(--b3-theme-on-primary, #fff);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.north-caltab-board-diary:hover {
+  filter: brightness(1.05);
+}
+.north-caltab-board-diary .north-caltab-habit-sicon {
+  color: currentColor;
+}
+
+/* —— ② 记录趋势 + 本期 vs 上期 ——
+   左边一条按天的折线（淡色面积 + 采样点），右边一栏环比。
+   这张卡原先是一整年日历热力图，已整个去掉：记录少的时候它几乎全是空白，
+   而"每天多少"用一条线读起来更快、也看得见起伏。 */
+.north-caltab-board-heatrow {
+  display: grid;
+  /* 3:2（原 2:1）：左折线仍是大头，但右栏「本期概览」是九块 3×3，
+     格子需要更宽才排得下「环比 +500%」这种徽标 —— 2:1 时格子内容盒只有
+     42px，徽标（约 56px）会溢出。窄屏退成一栏（见媒体查询）。 */
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 12px;
+  /* **stretch 让两栏的框一样高** —— 谁的内容多就由谁定高，另一栏跟着长，
+     两边的卡片边框才会齐平（原来是 start，左边那条就短一截，看着像没对齐）。 */
+  align-items: stretch;
+}
+/* 左栏：竖直的 flex，头部钉在上面、折线在剩下的空间里**居中** ——
+   这样无论哪一栏更高，图都不会挤在顶上一小块、底下留一大片空白。 */
+.north-caltab-board-trendcard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* 折线：几何与统计视图那条走势是同一条（viewBox 1000×200），
+   字号跟着 viewBox 缩放，宽度写死会一会儿太大一会儿太小 */
+.north-caltab-board-trend {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* margin:auto 0 = 在左栏剩下的空间里**竖直居中**：
+     两栏被 stretch 拉成一样高之后，谁高谁矮都不该让图挤在顶上 */
+  margin: auto 0;
+}
+/* 线与面积的颜色**由 JS 按习惯各自的类型色内联**（一条曲线一个习惯），
+   这里只管粗细与端帽 —— 别在这里再写一次颜色，会和图例对不上。
+   粗细按 viewBox 1000 宽的缩放估过：3.5 在常见dock宽度下约 2px，
+   和参考图的线一样是"看得见但不压点"的那一档。 */
+.north-caltab-board-trend-line {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* 面积的浓度在 JS 的 linearGradient 里（0.3 → 0.02：贴着曲线处浓、基线处淡），
+   这里不再压一遍 opacity —— 两处叠会把渐变的效果抵掉。 */
+.north-caltab-board-trend-area {
+  stroke: none;
+}
+/* 圆点是**描边环**：环里填卡片背景色（两种主题下都干净），
+   描边色由 JS 按习惯各自的类型色内联。 */
+.north-caltab-board-trend-dot {
+  fill: var(--b3-theme-background);
+  stroke-width: 2;
+}
+/* 图例：颜色点 + 习惯名（与曲线一一对应） */
+.north-caltab-board-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-trend-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.north-caltab-board-trend-leg i {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  /* 圆形（跟曲线上的描边环圆点同一画法），不是圆角方块 */
+  border-radius: 50%;
+}
+.north-caltab-board-trend-axis {
+  fill: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 概览卡：九块 3×3（条数 / 天数 / 日均 / 单日最多 / 当前连续 / 最长连续 /
+   追踪 / 活跃 / 记录最多）。三行各有说法：记了多少 → 最好一天与连续性 →
+   习惯的面。每块同一套读法：名目 → 大数字 → 一行灰字上下文。
+   3×3 而不是一列九块：一列会把卡撑得比左边折线高一大截。
+   间距就是 gap 8px + 卡头共用规则的 12px：试过收到 6px/6px（align-content:start
+   那套），用户要求改回来 —— **别再"顺手收紧"**，这个松紧是他定的。 */
+.north-caltab-board-deltas {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+/* 卡头**不吃格子**：它是这张卡的标题，不是九块里的一块。
+   这张卡自己就是 grid 容器（.north-caltab-board-deltas 同时是卡片元素），
+   卡头是它的第一个子元素 —— 不写这条，卡头会占掉左上角（2026-10-15 踩过）。
+   只作用在本卡：别的卡的父容器都不是 grid，写不写都一样。
+   **margin-bottom 覆盖成 0**（共用规则是 12px）：小字行（本期/上期日期）
+   因此贴着卡头当副标题，两者之间只剩网格间距 8px。省下的 12px 加进
+   九块的高度里（见 .north-caltab-board-delta 的 padding）。 */
+.north-caltab-board-deltas > .north-caltab-board-cardhead {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+/* 卡头下那一行小字（本期/上期到底是哪几天）：同样要跨排，
+   否则它会当第一块占掉左上角（和卡头同一条教训）。
+   **不设自己的 margin**：上面 8px 是网格间距、下面 8px 也是 ——
+   等距（上下各 20px）试过一轮，用户要求改回去，别再"顺手居中"。 */
+.north-caltab-board-deltas-note {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+/* 3×3 的格子只有 ~60px 宽：字号按小格子收紧，数字仍是主角（20px）。
+   **高度是撑过的**：卡头 margin-bottom 省下的 12px 加到这里 ——
+   padding 8/9 → 10/11，数字与小字各让 2px，每块高 ~8px、三行共 ~24px，
+   格子显得饱满而不是挤在一小条里。横向 padding 保持 8px 不动：
+   那是徽标（环比 +500%）的命线，再收就溢出了。 */
+.north-caltab-board-delta {
+  padding: 10px 8px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-board-delta-name {
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-delta-v {
+  margin-top: 2px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-delta-v span {
+  margin-left: 1px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 唯一一行小字：左上下文（上周期 N / 自哪天 / 日期段 / 别名），右端一枚环比徽标
+   （只有条数天数两块有）；**挤了就换行**，别把徽标压扁。
+   （旧的 .north-caltab-board-delta-prev「上周期 N」独立一行已合并到这里 ——
+   徽标和日期段已经说清的事不再另起一行，要恢复就把 ctx 拆回两行 div。） */
+.north-caltab-board-delta-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-top: 5px;
+  font-size: 9.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-delta-badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--b3-theme-primary) 12%, transparent);
+  color: var(--b3-theme-primary);
+  font-weight: 600;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* （原来的 .north-caltab-board-streaks 卡底两行小字已删除：当前/最长连续
+   提成了上面 2×2 里的两块，见 .north-caltab-board-deltas 的注释。
+   要恢复就把 streakBlock 的 HTML 改回一个 div.north-caltab-board-streaks
+   包两个 <span>，CSS 是 display:flex;flex-direction:column;gap:3px;
+   margin-top:auto;padding-top:8px;font-size:11px，b 加粗、i 左距 5px。） */
+
+
+/* —— ③ 习惯打卡：近 30 天点阵，行 = 习惯，列 = 天 —— */
+.north-caltab-board-habits {
+  display: flex;
+  flex-direction: column;
+}
+.north-caltab-board-dhead,
+.north-caltab-board-habit {
+  display: grid;
+  grid-template-columns: minmax(52px, 76px) 1fr 48px 52px;
+  align-items: center;
+  gap: 8px;
+}
+.north-caltab-board-dhead {
+  margin-bottom: 5px;
+}
+.north-caltab-board-habit {
+  padding: 2px 0;
+}
+.north-caltab-board-habit-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-board-habit-name i {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-board-habit-name.is-head {
+  color: transparent;
+}
+/* 点阵：列宽弹性铺满，格子保持正方（与年热力同款观感） */
+.north-caltab-board-dgrid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  min-width: 0;
+}
+.north-caltab-board-dcell-h {
+  display: block;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+  white-space: nowrap;
+  overflow: visible;
+}
+/* 首尾两个日期标签贴住点阵的左右边，中间的居中 —— 否则长标签会探出去
+   压到右边「连续 / 完成率」表头上。末尾那个用「右边缘对齐本格右边缘」
+   的自适应写法（left:100% + translateX(-100%)），格子无论多窄都不会探出去。 */
+.north-caltab-board-dcell-h.is-last {
+  position: relative;
+  left: 100%;
+  transform: translateX(-100%);
+}
+.north-caltab-board-dcell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 6%, transparent);
+}
+.north-caltab-board-dcell.is-record {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 22%, var(--b3-theme-background));
+}
+.north-caltab-board-dcell.is-done {
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 82%, var(--b3-theme-background));
+}
+.north-caltab-board-dcell.is-off {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 3%, transparent);
+  opacity: 0.5;
+}
+.north-caltab-board-habit-streak,
+.north-caltab-board-habit-rate {
+  text-align: right;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-habit-streak {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+.north-caltab-board-habit-streak.is-head,
+.north-caltab-board-habit-rate.is-head {
+  font-size: 10px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-dlegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-board-dlegend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.north-caltab-board-dlegend .north-caltab-board-dcell {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+/* —— ③′ 类型分布（「各类型条数」那张卡）—— 已按要求移除，样式一并删掉。
+   想恢复就把这段加回来，并在 JS 侧把卡片与 BOARD_TABS 的 "typeCount" 接上。 —— */
+
+/* —— ③″ 类型时间轴：窗口右端那一天，00:00 → 24:00 按类型分段上色 ——
+   参考图那块「每日时间轴」：上面一行图例（类型色点 + 名字），
+   中间一条彩色横条，下面一行两小时一格的刻度。 */
+.north-caltab-board-timeline {
+  display: flex;
+  flex-direction: column;
+}
+/* 卡头右侧那组：日期文字 + 取消钉住的 ✕，两者并排、基线对齐 */
+.north-caltab-board-cardmeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.north-caltab-board-tlpin {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 7%, transparent);
+  color: var(--b3-theme-on-surface-light);
+  font-size: 10px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-board-tlpin:hover {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 14%, transparent);
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-board-tllegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface);
+}
+.north-caltab-board-tllegitem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.north-caltab-board-tllegitem i {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+/* 横条本体：只有一段（24 小时）高度，竖线画在它上面 */
+.north-caltab-board-tltrack {
+  position: relative;
+  height: 22px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 5%, transparent);
+}
+.north-caltab-board-tllines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.north-caltab-board-tllines i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--b3-theme-background) 55%, transparent);
+}
+/* 每一段：绝对定位按分钟比例铺开。宽度给了 0.12% 保底，
+   几分钟的记录也留得下一条看得见的细线（否则整段会消失）。 */
+.north-caltab-board-tlseg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 1px;
+  transition: filter 0.15s;
+}
+.north-caltab-board-tlseg:first-of-type {
+  border-radius: 5px 0 0 5px;
+}
+.north-caltab-board-tlseg:last-of-type {
+  border-radius: 0 5px 5px 0;
+}
+/* 只有时间点、算不出跨度的那几条：缩成一枚小圆头，与整段的色块区分开 */
+.north-caltab-board-tlseg.is-point {
+  top: 3px;
+  bottom: 3px;
+  min-width: 3px;
+  border-radius: 999px;
+}
+.north-caltab-board-tlseg:hover {
+  filter: brightness(1.12);
+}
+.north-caltab-board-tlaxis {
+  position: relative;
+  height: 15px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+/* 周 / 月档：一天一行，左边挂日期 —— 多行时才出现 */
+.north-caltab-board-tlrows {
+  /* 月档 31 行全铺开能占掉大半屏，这里给个上限、超出滚动；
+     日档只有一条 track（没有这个容器），所以不受影响 */
+  max-height: 420px;
+  overflow-y: auto;
+}
+.north-caltab-board-tlrow {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.north-caltab-board-tlrowlab {
+  font-size: 10px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+/* 周 / 月档铺到周期末尾，未来那几天没有记录 —— 整行压淡 */
+.north-caltab-board-tlrow.is-future {
+  opacity: 0.4;
+}
+/* 多行时每行收细一点，7 / 31 行才铺得进一屏 */
+.north-caltab-board-tltrack.is-thin {
+  height: 14px;
+  border-radius: 4px;
+}
+/* 多行时刻度带左侧也留出日期那一列，与上面的横条对齐 */
+.north-caltab-board-tlaxis.is-indent {
+  margin-left: 50px;
+}
+.north-caltab-board-tltick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+/* 首尾两条贴着横条两端，不让标签探出去（00:00 靠左、24:00 靠右） */
+.north-caltab-board-tltick:first-child {
+  transform: none;
+}
+.north-caltab-board-tltick:last-child {
+  transform: translateX(-100%);
+}
+
+/* —— ③‴ 类型时长汇总：一张条形图 ——
+   名字一列、条形一列，时长写在**条的右端外侧**（不是条里），
+   扫一眼就是"谁最长、差多少"；底部一排 0 起的刻度交代尺度。
+   三处刻意的减法 —— 都是按使用者反馈**逐步去掉的，别再"贴心地"加回来**：
+     ① **没有灰色轨道**：条后面留空，不必再画一条贯穿全宽的底槽；
+     ② **没有隔行底色**：试过两色交替（照参考图），实际看着像一张表格；
+     ③ **没有竖网格线**：底下一排刻度已经够读尺度，竖线只会让整块更像表格。
+   最后剩下的就是「名字 + 条 + 数值 + 一排刻度」—— 条是唯一的主体。
+   名字列宽由 JS 按当期最长的类型名算好，喂进 --dur-namew ——
+   条形与坐标轴两处的左侧空档都由它 + --dur-gap 推出来，永远不会错位。 */
+.north-caltab-board-durs {
+  display: flex;
+  flex-direction: column;
+}
+.north-caltab-board-durchart {
+  --dur-gap: 10px;
+}
+.north-caltab-board-durrows {
+  display: flex;
+  flex-direction: column;
+}
+.north-caltab-board-durrow {
+  display: grid;
+  grid-template-columns: var(--dur-namew, 60px) 1fr;
+  align-items: center;
+  gap: var(--dur-gap);
+  height: 36px;
+  padding: 0 10px;
+}
+/* 行**不铺任何底色**：早先试过隔行两色（照参考图），实际看着像一张表格 ——
+   条本身就是主角，行只是它的容器，底色只会把这一块切成一格一格。 */
+.north-caltab-board-durname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 名字用**主字色**：它是这一行的标签，不是辅助说明（参考图里也是深色实字） */
+  font-size: 12.5px;
+  color: var(--b3-theme-on-background);
+}
+/* 条形区：不裁溢出（时长标签挂在条尾外侧）。竖网格线去掉之后这里只剩
+   「给 label 当定位参照」一个职责，不再需要 z-index —— 没有东西和它判层。 */
+.north-caltab-board-durplot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+/* 条做**敦实**一点（行高 36 → 条 20，上下各留 8px）：参考图里条是主体，
+   细条会让整块看着单薄；圆角跟着条厚一起放大，两端才不显尖。 */
+.north-caltab-board-durbar {
+  display: block;
+  min-width: 3px;
+  height: 20px;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+.north-caltab-board-durval {
+  position: absolute;
+  top: 50%;
+  margin-left: 9px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 兜底：刻度放大也追不上、条顶到右端时，把时长挪进条里（右端内缩），
+   否则会探出卡片被裁 */
+.north-caltab-board-durval.is-inside {
+  margin-left: -8px;
+  transform: translate(-100%, -50%);
+  color: var(--b3-theme-background);
+}
+/* 刻度带：左侧留出与类型名等宽的空档，刻度与上面的条形对齐 */
+.north-caltab-board-duraxis {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--dur-namew, 60px) 1fr;
+  gap: var(--dur-gap);
+  margin-top: 8px;
+}
+.north-caltab-board-duraxis-track {
+  position: relative;
+  height: 14px;
+  font-size: 10px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-duraxis-lab {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.north-caltab-board-duraxis-lab:first-child {
+  transform: none;
+}
+.north-caltab-board-duraxis-lab:last-child {
+  transform: translateX(-100%);
+}
+
+/* —— ④ 指标走势：小折线网格 —— */
+.north-caltab-board-metricgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 12px;
+}
+.north-caltab-board-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 3%, transparent);
+}
+.north-caltab-board-metric-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.north-caltab-board-metric-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.north-caltab-board-metric-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+}
+.north-caltab-board-metric-last {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--b3-theme-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-board-chartbox {
+  min-height: 120px;
+}
+.north-caltab-board-chartbox > .north-caltab-metric-chart {
+  min-height: 0;
+}
+.north-caltab-board-metric-none {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 窄屏：今日进度两列并一列、「趋势 + 环比」两栏并一栏、打卡点阵收紧 */
+@media (max-width: 720px) {
+  .north-caltab-board-progress {
+    grid-template-columns: 1fr;
+  }
+  /* 折线与环比卡在窄屏排不开（2:1 会把折线压扁），改上下排 */
+  .north-caltab-board-heatrow {
+    grid-template-columns: 1fr;
+  }
+  .north-caltab-board-dhead,
+  .north-caltab-board-habit {
+    grid-template-columns: minmax(44px, 60px) 1fr 34px 38px;
+    gap: 5px;
+  }
+  .north-caltab-board-durrow,
+  .north-caltab-board-duraxis {
+    grid-template-columns: minmax(44px, 64px) 1fr;
+    gap: 6px;
+  }
+  /* 窄屏把刻度隔一条藏一条：10 个「00:00」挤在一行会连成一片 */
+  .north-caltab-board-tltick:not(.is-wide) {
+    display: none;
   }
 }
