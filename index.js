@@ -14418,11 +14418,36 @@
       return !(this.data && this.data.intervalBadge === false);
     }
 
+    /* —— 分页取全量：绕开内核 SQL 接口的默认行数上限 ——
+       新版思源对**没有显式 LIMIT** 的语句按「设置 → 搜索 → 搜索结果显示数」
+       （默认 64）截断，响应里带 `truncated: true`，返回的是前 N 行。
+       一篇日记写到第 65 个段落之后，后半截的记录就整段查不到 ——
+       间隔属性正是这样丢的：算出来的 recs 里根本没有那些块，
+       自然也不会给它们写属性（连带旧值也清不掉）。
+       带显式 LIMIT 的语句不走这道拦截，所以这里自己分页：每页 pageSize 条，
+       取到不满一页为止。ORDER BY 由调用方给（blocks.id 即创建时间，天然稳定），
+       否则 OFFSET 分页在无排序时可能重复 / 漏行。 */
+    async _sqlAll(stmt, pageSize = 500) {
+      const out = [];
+      const step = pageSize > 0 ? pageSize : 500;
+      /* 兜底上限：999 页 × 500 = 约 50 万行，正常文档远远到不了 */
+      for (let page = 0; page < 999; page++) {
+        const resp = await this._request("/api/query/sql", {
+          stmt: `${stmt} LIMIT ${step} OFFSET ${page * step}`,
+        });
+        const rows =
+          resp && resp.code === 0 && Array.isArray(resp.data) ? resp.data : [];
+        for (const row of rows) out.push(row);
+        if (rows.length < step) break;
+      }
+      return out;
+    }
+
     /* 块 ID / 文档 ID → 所在文档（根块）ID。文档 ID 查自己，两种都兜住。 */
     async _rootIdOf(id) {
       try {
         const resp = await this._request("/api/query/sql", {
-          stmt: `SELECT root_id FROM blocks WHERE id = '${id}'`,
+          stmt: `SELECT root_id FROM blocks WHERE id = '${id}' LIMIT 1`,
         });
         const rid =
           resp && resp.code === 0 && resp.data && resp.data[0]
@@ -14446,10 +14471,11 @@
       const aInterval = this._attr(LIFELOG_INTERVAL_KEY);
       let rows = [];
       try {
-        const resp = await this._request("/api/query/sql", {
-          stmt: `SELECT id, content FROM blocks WHERE root_id = '${rootId}' AND type = 'p'`,
-        });
-        if (resp && resp.code === 0 && Array.isArray(resp.data)) rows = resp.data;
+        /* 必须走 _sqlAll 分页：无 LIMIT 的语句会被内核按默认 64 行截断，
+           长日记后半截的记录会整段漏算（见 _sqlAll 的注释）。 */
+        rows = await this._sqlAll(
+          `SELECT id, content FROM blocks WHERE root_id = '${rootId}' AND type = 'p' ORDER BY id`
+        );
       } catch (e) {
         return;
       }
@@ -14501,19 +14527,18 @@
         }
         want.set(recs[i].id, dur !== null && dur > 0 ? fmtDurText(dur) : "");
       }
-      /* 现有属性一次查齐（join blocks 用 root_id 圈定本文档） */
+      /* 现有属性一次查齐（join blocks 用 root_id 圈定本文档）。
+         同样要分页：只看到前 64 条的话，后面的块会被当成「本来就没有属性」，
+         于是每轮同步都重写一遍（写放大），旧值也清不掉。 */
       const have = new Map();
       try {
-        const resp = await this._request("/api/query/sql", {
-          stmt:
-            `SELECT a.block_id AS bid, a.value AS value ` +
+        const attrs = await this._sqlAll(
+          `SELECT a.block_id AS bid, a.value AS value ` +
             `FROM attributes a INNER JOIN blocks b ON b.id = a.block_id ` +
-            `WHERE b.root_id = '${rootId}' AND a.name = '${aInterval}'`,
-        });
-        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
-          for (const row of resp.data) {
-            have.set(row.bid, String(row.value == null ? "" : row.value));
-          }
+            `WHERE b.root_id = '${rootId}' AND a.name = '${aInterval}' ORDER BY a.block_id`
+        );
+        for (const row of attrs) {
+          have.set(row.bid, String(row.value == null ? "" : row.value));
         }
       } catch (e) {
         /* 查不到就当全空，走全量写 */
@@ -14561,13 +14586,14 @@
         const aDate = this._attr("date");
         let rows = [];
         try {
-          const resp = await this._request("/api/query/sql", {
-            stmt:
-              `SELECT DISTINCT b.root_id AS rid FROM blocks b ` +
+          /* 分页取全量文档列表：显式 LIMIT 的老写法虽然不被内核截断，
+             但会静默卡在 2000 篇；这里改成每页 1000 一直取到不满页。 */
+          rows = await this._sqlAll(
+            `SELECT DISTINCT b.root_id AS rid FROM blocks b ` +
               `INNER JOIN attributes a ON b.id = a.block_id AND a.name = '${aDate}' ` +
-              `WHERE b.type = 'p' LIMIT 2000`,
-          });
-          if (resp && resp.code === 0 && Array.isArray(resp.data)) rows = resp.data;
+              `WHERE b.type = 'p' ORDER BY rid`,
+            1000
+          );
         } catch (e) {
           return;
         }
