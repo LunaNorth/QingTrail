@@ -2,11 +2,11 @@
     "name": "QingTrail",
     "author": "LunaNorth",
     "url": "https://github.com/LunaNorth/QingTrail",
-    "version": "1.1.9",
+    "version": "1.2.0",
     "minAppVersion": "3.3.3",
     "disabledInPublish": true,
     "backends": ["all"],
-    "frontends": ["desktop"],
+    "frontends": ["all"],
     "displayName": {
         "default": "QingTrail",
         "zh_CN": "轻迹"

@@ -5496,6 +5496,7 @@
             <div class="north-lifelog-dock-header">
                 <div class="north-lifelog-dock-tabs">
                     <button class="north-lifelog-dock-tab active" data-dock-tab="records" id="lifelog-dock-tab-records">记录</button>
+                    <button class="north-lifelog-dock-tab" data-dock-tab="list" id="lifelog-dock-tab-list">清单</button>
                     <button class="north-lifelog-dock-tab" data-dock-tab="stats" id="lifelog-dock-tab-stats">统计</button>
                     <button class="north-lifelog-dock-tab" id="lifelog-dock-open-calendar" data-tip="在标签页中打开日历">日历</button>
                 </div>
@@ -5510,6 +5511,9 @@
                 <div class="north-lifelog-timeline-empty">加载中…</div>
             </div>
             <div class="fn__flex-1 north-lifelog-dock-stats" id="north-lifelog-dock-stats" style="display:none"></div>
+            <div class="fn__flex-1 north-lifelog-dock-listview" id="north-lifelog-dock-listview" style="display:none">
+                <div class="north-lifelog-lv-empty">加载中…</div>
+            </div>
             <button class="north-lifelog-dock-fab" id="lifelogDockFab" data-tip="添加记录">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><use xlink:href="#iconAdd"></use></svg>
             </button>
@@ -5555,7 +5559,7 @@
           if (this._dockActiveView === "stats") this._renderLifeLogDockStats(root);
         });
       }
-      /* 绑定顶部页签切换（记录 / 统计）。
+      /* 绑定顶部页签切换（记录 / 清单 / 统计）。
          「日历」不参与 Dock 内部切换 —— 它是打开思源标签页的入口，
          因此不带 data-dock-tab，在这里被 if (!target) 跳过。 */
       const tabs = root.querySelectorAll(".north-lifelog-dock-tab");
@@ -5568,6 +5572,9 @@
           this._dockActiveView = target;
           this._layoutLifeLogDock(root);
           if (target === "stats") this._renderLifeLogDockStats(root);
+          /* 清单视图每次切进来都重画一遍：它比记录视图多算了「每日小结」，
+             趁切换时用缓存重算，用户看到的永远是当前数据。 */
+          if (target === "list") this._renderLifeLogDockListView();
         });
       });
       /* 「日历」：在思源标签页里打开日历视图 */
@@ -5583,13 +5590,16 @@
     _layoutLifeLogDock(root) {
       const records = this._dockActiveView === "records";
       const stats = this._dockActiveView === "stats";
+      const listView = this._dockActiveView === "list";
       const strip = root.querySelector("#lifelog-dock-week-strip");
       const listEl = root.querySelector("#north-lifelog-dock-list");
       const statsEl = root.querySelector("#north-lifelog-dock-stats");
+      const lvEl = root.querySelector("#north-lifelog-dock-listview");
       const fab = root.querySelector("#lifelogDockFab");
       const tabs = root.querySelectorAll(".north-lifelog-dock-tab");
       if (strip) strip.style.display = records ? "" : "none";
       if (listEl) listEl.style.display = records ? "" : "none";
+      if (lvEl) lvEl.style.display = listView ? "" : "none";
       if (statsEl) statsEl.style.display = stats ? "" : "none";
       if (fab) fab.style.display = records ? "" : "none";
       tabs.forEach((t) => {
@@ -5654,6 +5664,8 @@
       const now = Date.now();
       if (!forceRefresh && this._lifelogDockCache && this._lifelogDockCacheTime && now - this._lifelogDockCacheTime < 30000) {
         this._renderLifeLogDockList(listEl, this._lifelogDockCache);
+        /* 当前停在清单视图时一并重画：两套视图共用一份缓存，不必再查库 */
+        if (this._dockActiveView === "list") this._renderLifeLogDockListView();
         return;
       }
       /* 清除日期筛选并重绘周历条 */
@@ -5669,6 +5681,7 @@
         this._lifelogDockCache = records || [];
         this._lifelogDockCacheTime = Date.now();
         this._renderLifeLogDockList(listEl, this._lifelogDockCache);
+        if (this._dockActiveView === "list") this._renderLifeLogDockListView();
         /* 日历标签页也用这份缓存，顺手把它一起重绘（上面刚赋值，不会重复查询）。
            数据源选「创建的文档」时，日历会去查文档那份数据，这里同样不白跑。 */
         this._refreshCalendarTabs();
@@ -13660,6 +13673,150 @@
         });
       });
       listEl.innerHTML = html;
+    }
+
+    /* 渲染 Dock「清单」视图。
+       定位：记录视图是卡片式、一条占三四行；统计视图是聚合数字；
+       清单视图夹在中间 —— 一天压成若干薄行（时间 / 类型 / 内容 / 间隔），
+       顶上给一句当日小结和一条 24 小时分布条，用来「一眼扫完一天」。
+       数据全部来自 _lifelogDockCache，不另查库；间隔口径复用
+       _lifelogTimelineParts()，与记录视图、时间轴、表格完全一致。 */
+    _renderLifeLogDockListView() {
+      const root = this._lifeLogDockEl;
+      if (!root) return;
+      const box = root.querySelector("#north-lifelog-dock-listview");
+      if (!box) return;
+      /* 缓存还没到（刚开插件就切过来）：先把加载态摆上，再拉一次数据，
+         数据回来后 _refreshLifeLogDockContent 会回头重画本视图。 */
+      const records = Array.isArray(this._lifelogDockCache) ? this._lifelogDockCache : null;
+      if (!records) {
+        box.innerHTML = '<div class="north-lifelog-lv-empty">加载中…</div>';
+        this._refreshLifeLogDockContent();
+        return;
+      }
+      if (!records.length) {
+        box.innerHTML = '<div class="north-lifelog-lv-empty">还没有记录，点击右下角 + 开始记录</div>';
+        return;
+      }
+      const esc = (s) =>
+        String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      const toMin = (t) => {
+        const m = String(t == null ? "" : t).match(/(\d{1,2}):(\d{2})/);
+        if (!m) return null;
+        const h = Number(m[1]);
+        const mi = Number(m[2]);
+        if (!(h >= 0 && h <= 23) || !(mi >= 0 && mi <= 59)) return null;
+        return h * 60 + mi;
+      };
+      const fmtDur = (min) => {
+        const h = Math.floor(min / 60);
+        const mm = min % 60;
+        return h > 0 ? `${h}时${mm}分` : `${mm}分`;
+      };
+      const colorOf = (t) => this._dockTypeColor(t) || "";
+      const parts = this._lifelogTimelineParts(records);
+      const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+      /* 按日期分组：日期倒序、日内时间倒序。
+         跟记录视图保持同一个方向 —— 侧栏很窄，最新的那条必须在最上面，
+         否则每次都要先滚到底。 */
+      const groups = new Map();
+      records.forEach((r) => {
+        if (!r || !r.date) return;
+        if (!groups.has(r.date)) groups.set(r.date, []);
+        groups.get(r.date).push(r);
+      });
+      const dates = Array.from(groups.keys()).sort((a, b) => b.localeCompare(a));
+
+      let html = "";
+      dates.forEach((date) => {
+        const items = groups
+          .get(date)
+          .slice()
+          .sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+        const mins = items.map((r) => toMin(r.time)).filter((m) => m !== null);
+        /* 当日跨度：最早一条到最晚一条。少于两条就没有跨度可言，不显示这一项。
+           展示用「历时」而不是「跨度」—— 跨度偏术语，历时是「从第一条记到最后一条，
+           中间一共经历多久」，日常说法，也正好说明这个数不是各段时长之和。 */
+        const span = mins.length > 1 ? Math.max.apply(null, mins) - Math.min.apply(null, mins) : 0;
+
+        /* 类型小结：出现次数前 4 的类型，替代参考图里「高 / 中 / 低 / 打卡」那排计数。
+           轻迹没有难度分级，能一眼看出的就是「这天都记了些什么、各几条」。 */
+        const count = new Map();
+        items.forEach((r) => {
+          const t = (r.type || "").trim();
+          if (t) count.set(t, (count.get(t) || 0) + 1);
+        });
+        const top = Array.from(count.entries())
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 4);
+
+        const dt = new Date(date + "T00:00:00");
+        const dayLabel = isNaN(dt.getTime()) ? "" : " " + weekdays[dt.getDay()];
+
+        /* 24 小时分布条：一段记录从它自己的时间画到下一条的时间，
+           最后一条给一个 20 分钟的可见宽度（否则末段只有 1px 宽，等于看不见）。 */
+        const asc = items.slice().sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
+        const segs = [];
+        asc.forEach((r, i) => {
+          const s = toMin(r.time);
+          if (s === null) return;
+          const next = i + 1 < asc.length ? toMin(asc[i + 1].time) : null;
+          const e = Math.min(next !== null && next > s ? next : s + 20, 24 * 60);
+          const c = colorOf(r.type) || "var(--b3-theme-primary)";
+          segs.push(
+            `<i style="left:${((s / 1440) * 100).toFixed(2)}%;width:${Math.max(
+              0.6,
+              ((e - s) / 1440) * 100
+            ).toFixed(2)}%;background:${c}"></i>`
+          );
+        });
+
+        html += `<div class="north-lifelog-lv-day">
+            <div class="north-lifelog-lv-head">
+                <span class="north-lifelog-lv-date">${esc(date)}<span class="north-lifelog-lv-week">${dayLabel}</span></span>
+                <span class="north-lifelog-lv-sum">${items.length} 条${span > 0 ? ` · 历时 ${fmtDur(span)}` : ""}</span>
+            </div>
+            ${
+              top.length
+                ? `<div class="north-lifelog-lv-legend">${top
+                    .map(
+                      ([t, n]) =>
+                        `<span class="north-lifelog-lv-chip"><i style="background:${
+                          colorOf(t) || "var(--b3-theme-primary)"
+                        }"></i>${esc(t)}<b>${n}</b></span>`
+                    )
+                    .join("")}</div>`
+                : ""
+            }
+            <div class="north-lifelog-lv-bar">
+                <div class="north-lifelog-lv-track">${segs.join("")}</div>
+                <div class="north-lifelog-lv-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+            </div>
+            <div class="north-lifelog-lv-rows">${items
+              .map((r) => {
+                const info = parts.perRecord.get(r.id);
+                const durText = info ? info.durText : "";
+                const c = colorOf(r.type);
+                return `<div class="north-lifelog-lv-row" data-id="${esc(r.id)}">
+                    <span class="north-lifelog-lv-time">${esc(r.time)}</span>
+                    <span class="north-lifelog-lv-rail"><i style="--lv-c:${c || "var(--b3-theme-primary)"}"></i></span>
+                    <span class="north-lifelog-lv-main">
+                        <span class="north-lifelog-lv-body">${
+                          r.type ? `<span class="north-lifelog-lv-type"${c ? ` style="color:${c}"` : ""}>${esc(r.type)}</span>` : ""
+                        }<span class="north-lifelog-lv-text">${esc(r.content)}</span></span>
+                        ${
+                          durText
+                            ? `<span class="north-lifelog-lv-dur"><svg viewBox="0 0 24 24" fill="currentColor" width="10" height="10"><use xlink:href="#iconClock"></use></svg>${durText}</span>`
+                            : ""
+                        }
+                    </span>
+                </div>`;
+              })
+              .join("")}</div>
+        </div>`;
+      });
+      box.innerHTML = html;
     }
 
     /* 悬浮添加按钮：取可用类型。

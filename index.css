@@ -1735,6 +1735,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* 头部多了「间隔」按钮之后，窄侧栏有挤爆的风险：
+       空间够 → 页签与工具同排；不够 → 工具整体换到第二行靠右，
+       而不是把页签逐个压成竖排（原来的表现）。 */
+    flex-wrap: wrap;
+    row-gap: 2px;
     padding: 10px 16px;
     border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 35%, transparent);
     flex-shrink: 0;
@@ -1743,9 +1748,13 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: nowrap;
 }
 .north-lifelog-dock-tab {
-    padding: 6px 16px;
+    /* 12px → 10px：页签从 3 个变 4 个（记录 / 清单 / 统计 / 日历）之后，
+       按默认侧栏宽度算总宽正好卡在临界点，收窄这一档才不会把刷新按钮挤到第二行。
+       实测：4 × 48 + 3 × 6（gap）+ 32（刷新）+ 32（左右内边距）= 274px。 */
+    padding: 6px 10px;
     border: none;
     background: transparent;
     color: var(--b3-theme-on-surface-light);
@@ -1754,6 +1763,7 @@
     font-size: 14px;
     line-height: 1.4;
     font-family: inherit;
+    white-space: nowrap;
     transition: color 0.15s, background 0.15s;
 }
 .north-lifelog-dock-tab:hover {
@@ -2418,12 +2428,216 @@
   min-height: 0;
 }
 
-/* 头部右侧工具按钮组（设置 + 刷新） */
+/* 头部右侧工具按钮组（刷新）
+   margin-left:auto 是给 header 的 wrap 兜底用的：
+   换到第二行时这一组会自动贴右，不会孤零零挂在左边。 */
 .north-lifelog-dock-tools {
   display: flex;
   align-items: center;
   gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
+
+/* ===================== Dock「清单」视图 =====================
+   头部第三个页签对应的面板，与「记录」（卡片式时间轴）、「统计」（聚合数字）并列。
+   记录视图一条占三四行，适合细读；清单视图一天压成若干薄行（时间 / 类型 / 内容 / 间隔），
+   顶上再给一句当日小结和一条 24 小时分布条 —— 定位是「一眼扫完一天」。
+   颜色只留给类型：其余全部走主题灰阶，缩到 250px 宽也不会花。 */
+
+.north-lifelog-dock-listview {
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+  background: var(--b3-theme-background);
+  scrollbar-width: none;
+}
+.north-lifelog-dock-listview::-webkit-scrollbar { display: none; }
+
+.north-lifelog-lv-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  font-size: 13px;
+  color: var(--b3-theme-on-surface-light);
+  user-select: none;
+}
+
+/* 一天一块，块间虚线分隔（参考图里的那几条细虚线） */
+.north-lifelog-lv-day {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--b3-border-color) 55%, transparent);
+}
+.north-lifelog-lv-day:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* 当日小结：左日期，右「N 条 · 跨度 X时Y分」 */
+.north-lifelog-lv-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.north-lifelog-lv-date {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+.north-lifelog-lv-week {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-lifelog-lv-sum {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 类型小结：色点 + 名称 + 次数（替代参考图那排「高 / 中 / 低 / 打卡」） */
+.north-lifelog-lv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+.north-lifelog-lv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface);
+  white-space: nowrap;
+}
+.north-lifelog-lv-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.north-lifelog-lv-chip b {
+  font-weight: 600;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 24 小时分布条：每段记录按类型色上色，位置按真实时间落点 */
+.north-lifelog-lv-bar { margin-bottom: 10px; }
+.north-lifelog-lv-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--b3-theme-surface-lighter) 70%, transparent);
+  overflow: hidden;
+}
+.north-lifelog-lv-track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  min-width: 2px;
+}
+.north-lifelog-lv-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 清单行：时间 | 轨（竖线 + 圆点）| 正文（类型 + 内容 + 右侧间隔） */
+.north-lifelog-lv-rows { display: block; }
+.north-lifelog-lv-row {
+  display: grid;
+  grid-template-columns: 38px 14px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 6px;
+  min-height: 24px;
+  padding: 1px 0;
+  border-radius: 5px;
+}
+.north-lifelog-lv-row:hover { background: color-mix(in srgb, var(--b3-list-hover) 55%, transparent); }
+.north-lifelog-lv-time {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.north-lifelog-lv-rail {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 竖线：整行贯通，首行上半段、末行下半段各收掉一半，接上日期与结尾 */
+.north-lifelog-lv-rail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--b3-border-color) 90%, transparent);
+}
+.north-lifelog-lv-row:first-child .north-lifelog-lv-rail::before { top: 50%; }
+.north-lifelog-lv-row:last-child .north-lifelog-lv-rail::before { bottom: 50%; }
+.north-lifelog-lv-rail i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--b3-theme-background);
+  border: 1.5px solid var(--lv-c, var(--b3-theme-primary));
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1;
+}
+.north-lifelog-lv-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.north-lifelog-lv-body {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+.north-lifelog-lv-type { font-size: 12px; font-weight: 500; flex-shrink: 0; }
+/* 内容单行省略：清单是拿来扫的，长文交给记录视图看 */
+.north-lifelog-lv-text {
+  font-size: 12.5px;
+  color: var(--b3-theme-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.north-lifelog-lv-dur {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-lifelog-lv-dur svg { width: 10px; height: 10px; display: block; opacity: 0.8; }
 
 /* ===================== Dock 紧凑模式（最终覆盖） =====================
    由 index.js 的 _applyDockCompact() 在 dock 根元素上切换
@@ -2440,7 +2654,7 @@
   padding: 6px 12px;
 }
 .north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-tab {
-  padding: 4px 12px;
+  padding: 4px 10px;
   font-size: 13px;
 }
 .north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-refresh {
@@ -2476,6 +2690,13 @@
 }
 .north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-stats {
   padding: 8px 12px 16px;
+}
+/* 清单视图跟着紧凑一档：留白与行高各收一点，一屏能多看三五行 */
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-listview {
+  padding: 8px 12px 14px;
+}
+.north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-lv-row {
+  min-height: 22px;
 }
 .north-luna-lifelog-dock-root.north-lifelog-dock-compact .north-lifelog-dock-fab {
   bottom: 14px;
