@@ -69,6 +69,13 @@
      记录时间被事后改过时两边数字就分叉，同一个块一会儿 55m 一会儿 12m。
      现在只写自己家的属性：单一写入方，结构上不可能再被覆盖。 */
   const LIFELOG_INTERVAL_KEY = "interval";
+  /* 任务完成状态落在块属性上：custom-<前缀>-taskdone，值 "1" = 已完成，空串 = 未完成。
+     为什么存块属性而不是另开一份插件数据：
+       1. 它天然跟着块走 —— 记录被剪切 / 移动 / 导出，完成状态一起过去；
+       2. 主题 / 代码片段能直接用 [custom-lifelog-taskdone="1"] 写样式；
+       3. 与 time / type / content 同族，改属性前缀时一起改，不用迁移第二套键。
+     老记录没有这个属性 = 未完成，零迁移。 */
+  const TASK_DONE_KEY = "taskdone";
   /* 时长文案：与时间轴 / 表格里的 fmtDur 同一份口径（>60 分钟走「N时M分」） */
   const fmtDurText = (min) => {
     const h = Math.floor(min / 60);
@@ -174,6 +181,9 @@
   const BOARD_TABS = [
     { value: "habit", label: "习惯", blocks: ["trendDelta", "habitGrid"] },
     { value: "record", label: "记录", blocks: ["cards", "recHeat", "daily", "dist", "trendLine"] },
+    /* 任务：只数「被标成任务的那些类型」。紧挨着「记录」是有意的 ——
+       任务本来就是记录的一个子集，两页连着读：先看记了多少，再看做完多少。 */
+    { value: "task", label: "任务", blocks: ["taskStats", "taskRhythm"] },
     {
       value: "type",
       label: "类型",
@@ -182,6 +192,10 @@
       blocks: ["timeline", "duration", "detail", "typeDist"],
     },
     { value: "metric", label: "指标", blocks: ["metric"] },
+    /* 回顾：上下两张卡（随机一批 + 按年分布）。它原先常驻在工作台页头，
+       现在挪成独立分类 —— 页头只留「今天」，"翻旧账"是另一种读法，
+       混在同一屏里两边都看不痛快。 */
+    { value: "review", label: "回顾", blocks: ["reviewCard", "reviewFoot"] },
   ];
   const BOARD_TAB_VALUES = BOARD_TABS.map((t) => t.value);
   /* 工作台三张「类型」卡**各自的默认周期**（卡头那颗 pill 的初值）。
@@ -602,8 +616,129 @@
     anchor: "起点：不吃穿过它的那段间隔，从它开始重新计时。点一下改回「普通」。",
   };
 
+  /* ---- 「任务类型」 ----
+     用户可以把某些记录类型声明成「任务」（存 settings.taskTypes，类型名数组）。
+     这类记录在日历里换一套长相：任务卡（对勾 + 标题 + 跳转箭头），
+     并且在顶栏多出一枚「只看任务」开关，一键把日历收成任务清单。
+
+     为什么挂在类型上而不是给记录加字段：类型是用户已经在维护的那份名单，
+     声明一次就自动覆盖全部历史记录，不用回头补数据；
+     而「这条记录是不是任务」是**派生**信息，没必要在块属性里再存一遍。
+     老配置里没有这个键 —— 读出来就是空数组，即「没有任务类型」，
+     所有视图与旧版完全一致，零迁移。 */
+  const normTaskTypes = (raw) => {
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set();
+    const list = [];
+    raw.forEach((t) => {
+      const name = String(t == null ? "" : t).trim();
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        list.push(name);
+      }
+    });
+    return list;
+  };
+
   /* 底边线取类型色的百分比：颜色比底色深，保证线条清晰 */
   const MARK_LINE_MIX = 60;
+
+  /* ---- 回顾（原「每日回顾」，已升成工作台的一个分类）----
+     在工作台里挑几条**旧记录**出来回看，给长期记录一个「翻旧账」的入口。
+     几条约束（每一条都对应一个具体的坑）：
+       ① 选中结果**按周期确定**（周期 key + 换批序号做种子），同一周期怎么重绘
+          都是同一批 —— 否则每刷新一次就换一批，"回顾"就变成了"抽奖"。
+          想换就点卡片上的「换一批」。周期本身（天 / 三天 / 周 / 月）在设置里选。
+       ② 只从**今天之前**的记录里挑：今天刚写的还没到回看的时候。
+       ③ 第一批优先「往年同期」（同月同日 ± 容差）—— 巧合同一天比纯随机有记忆点；
+          数量不够时再从全池补齐，不会因为池子小就空着。
+       ④ 只读记录、不读「文档」数据源：文档的 content 是标题，
+          回顾一串标题没有意义，所以这里跟指标视图一样固定读记录。 */
+  const REVIEW_COUNT_OPTIONS = [
+    { value: "1", label: "1 条" },
+    { value: "3", label: "3 条" },
+    { value: "5", label: "5 条" },
+  ];
+  const DEFAULT_REVIEW_COUNT = 3;
+  const normReviewCount = (value) => {
+    const n = Math.round(Number(value));
+    return REVIEW_COUNT_OPTIONS.some((o) => Number(o.value) === n)
+      ? n
+      : DEFAULT_REVIEW_COUNT;
+  };
+  const REVIEW_SCOPE_OPTIONS = [
+    { value: "1y", label: "近一年" },
+    { value: "3y", label: "近三年" },
+    { value: "all", label: "全部" },
+  ];
+  const DEFAULT_REVIEW_SCOPE = "all";
+  const normReviewScope = (value) =>
+    REVIEW_SCOPE_OPTIONS.some((o) => o.value === value)
+      ? value
+      : DEFAULT_REVIEW_SCOPE;
+  /* 回顾周期：多久换一批。
+       日 / 三日 / 周 / 月 —— 换的是"这一批什么时候翻页"，不是"回顾哪段时间"
+       （后者是下面的「回顾范围」）。两件事分开，才有「每天翻一批近三年的旧账」
+       这种组合；合成一个「每日 / 每周」选项就表达不出来了。
+       三日档按"距 1970 的天数 / 3"分块，所以它是**滚动**的三天，
+       不跟自然周对齐 —— 周已经有自己的档，没必要再塞一个"周一起算的三天"。 */
+  const REVIEW_CADENCE_OPTIONS = [
+    { value: "day", label: "每天" },
+    { value: "3d", label: "每三天" },
+    { value: "week", label: "每周" },
+    { value: "month", label: "每月" },
+  ];
+  const DEFAULT_REVIEW_CADENCE = "day";
+  const normReviewCadence = (value) =>
+    REVIEW_CADENCE_OPTIONS.some((o) => o.value === value)
+      ? value
+      : DEFAULT_REVIEW_CADENCE;
+  /* 「月-日」→ 一年中的第几天（按平年算，只用来比"同期"，
+     闰年多出来的 2 月 29 日落到 3 月 1 日那天，不影响判断）。 */
+  const MD_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  const mdToDoy = (md) => {
+    const m = Number(String(md).slice(0, 2));
+    const d = Number(String(md).slice(3, 5));
+    if (!m || !d || m > 12) return -1;
+    return MD_DAYS[m - 1] + d;
+  };
+
+  /* 字符串 → 32 位无符号种子（FNV-1a）。
+     用来把「哪一天 + 第几批」压成一个数字，喂给下面的可复现随机数。 */
+  const reviewSeed = (text) => {
+    let h = 2166136261;
+    const s = String(text == null ? "" : text);
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  };
+  /* mulberry32：短小、分布均匀、可复现。
+     用它而不是 Math.random，是为了「同一天刷新多少次都是同一批」。 */
+  const seededRandom = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  /* 用给定随机源做 Fisher–Yates。
+     不要用 sort(() => rnd() - 0.5) 那种写法：比较器不满足传递性，
+     不同引擎排出来的结果会飘，而且分布本身有偏。 */
+  const seededShuffle = (arr, rnd) => {
+    const out = arr.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = out[i];
+      out[i] = out[j];
+      out[j] = t;
+    }
+    return out;
+  };
 
   /* ===================== 指标：定义归一化 ===================== */
 
@@ -1078,6 +1213,16 @@
       /* 日历标签页的类型筛选：空集合 = 全部类型（默认）。只作用于日历标签页，
          Dock 那套月历不跟着变，否则会出现「月历筛了、下面的列表没筛」的错位。 */
       this._calTabTypeFilter = new Set();
+      /* 「只看任务」开关：打开后日历只留下任务类型的记录。
+         它和上面的类型筛选是**与**关系（先过任务、再过类型），
+         空集合那套「全部」语义不变。只活在内存里 —— 和类型筛选同款，
+         重启后回到「全部」，不把临时视角写进配置。 */
+      this._calTabTaskOnly = false;
+      /* 当天列表弹窗当前开着哪一天（"" = 没开）。
+         勾选任务会触发整页重绘、容器被换掉，靠它把弹窗原样恢复。 */
+      this._calTabDayModalKey = "";
+      /* _taskTypes() 的归一化缓存：{ src: 原始数组, list: 归一化结果 } */
+      this._taskTypeCache = null;
       /* 类型筛选面板是否开着 —— 重绘后据此恢复，否则勾一个就被关掉 */
       this._calTabTypeMenuOpen = false;
       /* 指标段位（指标）：看多长一段（近 N 天，见 METRIC_SCOPES；"0" = 全部）、
@@ -1106,6 +1251,11 @@
       this._calTabBoardDurAnchor = null;
       this._calTabBoardTlPeriod = BOARD_CARD_PERIOD_DEFAULT.tl;
       this._calTabBoardTlAnchor = null;
+      /* 回顾的「换一批」序号，以及它所属的周期 key（换周期自动归零）。
+         只活在内存里：换批是"随手再抽一次"，不必写进配置；
+         真正要记住的是周期 / 条数 / 范围，那几个在 data 里。 */
+      this._reviewRound = 0;
+      this._reviewRoundDay = "";
       /* 指标管理弹窗（挂在 body 上，卸载时要收掉，同类型管理） */
       this._metricModal = null;
       /* 指标改动攒着一起落盘（同 _typesDirty 那套防抖） */
@@ -1223,6 +1373,8 @@
       }
       /* 日历数据源：默认 LifeLog 记录，与旧行为一致；旧配置里没这项时补上 */
       this.data.calendarSource = normCalSource(this.data.calendarSource);
+      /* 任务类型：默认空（= 不把任何类型当任务，日历与旧版一致） */
+      this.data.taskTypes = normTaskTypes(this.data.taskTypes);
       /* 时间轴每小时基础高度（缩放基准）：默认 40px。
          统一夹到档位上，读的时候才不会出现「配置里是 43、设置里显示 40」。 */
       this.data.tlHourH = this._tlBaseHFrom(this.data.tlHourH);
@@ -1230,6 +1382,13 @@
       this.data.markLineWidth = normLineWidth(this.data.markLineWidth);
       /* 记录行底色：默认关闭，可选 1% 到 10% */
       this.data.markBgOpacity = normBgOpacity(this.data.markBgOpacity);
+      /* 回顾：默认开、每天一批、3 条、池子取全部历史。
+         默认开是有意的 —— 默认值越"能用"，越少人要去设置里翻；
+         不想要的人到设置里关掉即可，那一页会留一张说明卡指回设置。 */
+      if (typeof this.data.reviewOn !== "boolean") this.data.reviewOn = true;
+      this.data.reviewCount = normReviewCount(this.data.reviewCount);
+      this.data.reviewScope = normReviewScope(this.data.reviewScope);
+      this.data.reviewCadence = normReviewCadence(this.data.reviewCadence);
       /* Dock 侧边栏显示：默认关闭，用户自行决定是否在思源侧栏显示 LifeLog 面板 */
       this.data.dockVisible = this.data.dockVisible === true;
       /* 生成「块属性 到 --tt-c」的样式映射 */
@@ -1479,6 +1638,10 @@
             <div class="tt-group__card" data-tt-group="calendar"></div>
           </section>
           <section class="tt-group">
+            <header class="tt-group__title">任务设置</header>
+            <div class="tt-group__card" data-tt-group="task"></div>
+          </section>
+          <section class="tt-group">
             <header class="tt-group__title">控制设置</header>
             <div class="tt-group__card" data-tt-group="control"></div>
           </section>
@@ -1490,14 +1653,20 @@
             <header class="tt-group__title">指标设置</header>
             <div class="tt-group__card" data-tt-group="metric"></div>
           </section>
+          <section class="tt-group">
+            <header class="tt-group__title">回顾设置</header>
+            <div class="tt-group__card" data-tt-group="review"></div>
+          </section>
         </div>
       `;
       const insertCard = container.querySelector('[data-tt-group="insert"]');
       const appearanceCard = container.querySelector('[data-tt-group="appearance"]');
       const calendarCard = container.querySelector('[data-tt-group="calendar"]');
+      const taskCard = container.querySelector('[data-tt-group="task"]');
       const controlCard = container.querySelector('[data-tt-group="control"]');
       const habitCard = container.querySelector('[data-tt-group="habit"]');
       const metricCard = container.querySelector('[data-tt-group="metric"]');
+      const reviewCard = container.querySelector('[data-tt-group="review"]');
 
       /* —— 插入设置：日记笔记本 —— */
       const notebookRow = this._buildRow({
@@ -1592,6 +1761,23 @@
           },
         })
       );
+
+      /* —— 任务设置：把某个类型当作任务 ——
+         声明成任务的类型，其记录在日历里换成任务卡长相
+         （色条 + 对勾 + 标题 + 跳转箭头），顶栏也会多出一枚「只看任务」开关。
+         候选 = 数据里真实出现过的类型 + 已在任务名单里的类型
+         （最近没记录也还留着，不然想取消都找不到它）。 */
+      taskCard.appendChild(
+        this._buildRow({
+          title: "任务类型",
+          desc:
+            "把某个类型当作任务：这类记录在日历里显示成任务卡（带对勾与跳转箭头），顶栏还会多出一枚「只看任务」开关。点一下切换，立刻生效。",
+        })
+      );
+      const taskPick = document.createElement("div");
+      taskPick.className = "tt-habitpick";
+      taskCard.appendChild(taskPick);
+      this._mountTaskPicker(taskPick);
 
       /* —— 控制设置：类型管理 —— */
       controlCard.appendChild(
@@ -1882,9 +2068,187 @@
         );
       }
 
+      /* —— 回顾设置：工作台「回顾」分类那两张卡 ——
+         三个开关各管一件事，互不牵连：
+           开关 —— 整张卡片在不在（关掉就彻底不渲染，不留空壳）；
+           条数 —— 一次挑几条（1 / 3 / 5，默认 3）；
+           范围 —— 从多长的历史里挑（近一年 / 近三年 / 全部）。
+         改动只重绘已打开的日历标签页，不重查数据库 —— 回顾读的是同一份缓存，
+         池子变窄只是换个筛法。 */
+      if (reviewCard) {
+        reviewCard.appendChild(
+          this._buildRow({
+            title: "回顾",
+            desc:
+              "在工作台「回顾」分类里挑几条旧记录回看；同一周期内始终是同一批，点卡片上的「换一批」可以再抽一次。",
+            controlType: "toggle",
+            value: this._reviewOn(),
+            onChange: (v) => {
+              this.data.reviewOn = !!v;
+              this._persist("保存回顾开关");
+              this._refreshCalendarTabs();
+            },
+          })
+        );
+        reviewCard.appendChild(
+          this._buildRow({
+            title: "每次条数",
+            desc: "一次回顾几条记录。",
+            controlType: "select",
+            options: REVIEW_COUNT_OPTIONS,
+            value: String(this._reviewCount()),
+            onChange: (v) => {
+              this.data.reviewCount = normReviewCount(v);
+              this._persist("保存回顾条数");
+              this._refreshCalendarTabs();
+            },
+          })
+        );
+        reviewCard.appendChild(
+          this._buildRow({
+            title: "回顾周期",
+            desc: "多久换一批。「每周」就是这一周固定看同一批，下周自动翻新；想提前换就点卡片上的「换一批」。",
+            controlType: "select",
+            options: REVIEW_CADENCE_OPTIONS,
+            value: this._reviewCadence(),
+            onChange: (v) => {
+              this.data.reviewCadence = normReviewCadence(v);
+              this._persist("保存回顾周期");
+              this._refreshCalendarTabs();
+            },
+          })
+        );
+        reviewCard.appendChild(
+          this._buildRow({
+            title: "回顾范围",
+            desc: "从多长的历史里挑。「全部」会把很久以前的记录也翻出来。",
+            controlType: "select",
+            options: REVIEW_SCOPE_OPTIONS,
+            value: this._reviewScope(),
+            onChange: (v) => {
+              this.data.reviewScope = normReviewScope(v);
+              this._persist("保存回顾范围");
+              this._refreshCalendarTabs();
+            },
+          })
+        );
+      }
+
       /* 挂载时拉取笔记本列表（传 container 让刷新落在自己这一份上，
          设置面板在设置弹窗中复用（仅此一处）；各自刷新各自那份，不互相抢 this.notebookCddl） */
       this._refreshNotebooks(container);
+    }
+
+    /* 任务设置的芯片区：候选 = 数据里出现过的类型 + 已在任务名单里的类型，
+       点一下切换「算不算任务」。芯片上带一个小对勾，一眼看出哪些已经是任务。
+       与习惯选择器同一套 .tt-habitpick 芯片样式，设置面板里观感统一。
+       用 onclick 而不是 addEventListener —— 每次点击都会重排这段 HTML。 */
+    _mountTaskPicker(host) {
+      if (!host) return;
+      const picked = new Set(this._taskTypes());
+      /* 候选固定取**记录**那份数据（任务只对记录成立）：
+         即使当前数据源切成了「创建的文档」，这里也得列记录里的类型，
+         否则一换数据源任务设置就空了、连已选的任务都看不见。 */
+      const src = Array.isArray(this._lifelogDockCache)
+        ? this._lifelogDockCache
+        : this._calSource() === "docs"
+          ? []
+          : this._calSourceRecords() || [];
+      const count = new Map();
+      src.forEach((r) => {
+        const t = ((r && r.type) || "").trim();
+        if (t) count.set(t, (count.get(t) || 0) + 1);
+      });
+      const cands = Array.from(count.entries()).map(([name, cnt]) => ({
+        name,
+        cnt,
+        color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+      }));
+      /* 已在任务名单里、但最近一条记录都没有的类型**必须**列出来：
+         否则用户想取消它都找不到入口。这条不受下面「零计数不显示」的影响。 */
+      picked.forEach((name) => {
+        if (!cands.some((c) => c.name === name)) {
+          cands.push({
+            name,
+            cnt: 0,
+            color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+          });
+        }
+      });
+      /* 兜底：一条记录都没有时（首次使用），把类型管理里配好的类型铺出来 ——
+         否则这一屏要么是空的、要么只剩已选那几个，都没法新增。
+         有数据时不走这条：那时"只留有数据的"才是对的规则。 */
+      const hasData = cands.some((c) => c.cnt > 0);
+      if (!hasData) {
+        const known = new Set();
+        (this.data.typeGroups || []).forEach((g) => {
+          (g.items || []).forEach((i) => {
+            const name = ((i && i.name) || "").trim();
+            if (!name || known.has(name)) return;
+            if (cands.some((c) => c.name === name)) return;
+            known.add(name);
+            cands.push({
+              name,
+              cnt: 0,
+              color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+            });
+          });
+        });
+      }
+      /* 零计数的类型不铺出来：类型管理里通常囤了一大堆从没记过的类型，
+         全列出来会把这一屏塞成两三行灰芯片，真正有数据的反而被淹掉。
+         唯一的例外是**已选中的** —— 没记录也得留个能取消的入口。
+         （上面那次兜底只在"完全没数据"时跑，那时 hasData 为假，
+         这道过滤整段跳过 —— 补进来的芯片正好都留着当入口。） */
+      if (hasData) {
+        for (let i = cands.length - 1; i >= 0; i--) {
+          if (cands[i].cnt === 0 && !picked.has(cands[i].name)) cands.splice(i, 1);
+        }
+      }
+      cands.sort((a, b) => b.cnt - a.cnt || a.name.localeCompare(b.name, "zh"));
+      if (!cands.length) {
+        host.innerHTML =
+          '<div class="tt-habitpick__empty">日历数据里还没出现过类型 —— 先记几条再看。</div>';
+        return;
+      }
+      host.innerHTML = `<div class="tt-habitpick__chips">${cands
+        .map(
+          (c) =>
+            `<button class="tt-habitpick__chip${
+              picked.has(c.name) ? " on" : ""
+            }" type="button" data-task-type="${escapeHtml(c.name)}">
+                <span class="tt-habitpick__dot" style="background:${escapeHtml(
+                  c.color
+                )}"></span>
+                <span class="tt-habitpick__name">${escapeHtml(c.name)}</span>
+                ${
+                  picked.has(c.name)
+                    ? this._taskCheckSvg("tt-taskpick__tick", 11)
+                    : `<span class="tt-habitpick__count">${c.cnt}</span>`
+                }
+            </button>`
+        )
+        .join("")}</div>`;
+      host.onclick = (e) => {
+        const chip = e.target.closest && e.target.closest("[data-task-type]");
+        if (!chip) return;
+        const name = chip.dataset.taskType || "";
+        if (!name) return;
+        const next = new Set(this._taskTypes());
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        this.data.taskTypes = Array.from(next);
+        /* 一个任务类型都不剩了：把「只看任务」一起关掉，
+           否则下次再加类型时日历会莫名其妙只剩任务（开关还亮着）。 */
+        if (!this.data.taskTypes.length) this._calTabTaskOnly = false;
+        this._persist("保存任务类型");
+        this._mountTaskPicker(host);
+        /* 「已完成」胶囊的样式规则是按任务类型生成的（见 _ensureMarkStyle），
+           类型名单一变就得重建，否则刚取消的类型在正文里仍挂着胶囊。 */
+        this._ensureMarkStyle();
+        /* 任务卡 / 「只看任务」开关都长在日历上，改完立刻重绘一次 */
+        this._refreshCalendarTabs();
+      };
     }
 
     /* 习惯设置的芯片区：把「日历数据里出现过的类型」铺成一行行小芯片，
@@ -3220,6 +3584,376 @@
       return [];
     }
 
+    /* ===================== 回顾（工作台的一个分类）=====================
+       工作台「回顾」分类那两张卡：上面从历史记录里随机挑几条，下面按年看分布。
+       取数走 _reviewSourceRecords()（底层是 _metricRecords()，
+       固定读记录、不看「文档」数据源），
+       理由与指标视图相同 —— 文档的 content 是标题，回顾一串标题没有意义。 */
+
+    /* 卡片是否显示（设置里那个开关，默认开） */
+    _reviewOn() {
+      return !(this.data && this.data.reviewOn === false);
+    }
+
+    /* 一次挑几条 */
+    _reviewCount() {
+      return normReviewCount(this.data && this.data.reviewCount);
+    }
+
+    /* 从多长的历史里挑 */
+    _reviewScope() {
+      return normReviewScope(this.data && this.data.reviewScope);
+    }
+
+    /* 多久换一批（每天 / 每三天 / 每周 / 每月） */
+    _reviewCadence() {
+      return normReviewCadence(this.data && this.data.reviewCadence);
+    }
+
+    /* 当前这一批所属的周期。
+       返回的 key 同时干两件事：当随机种子的一部分（同周期同一批稳定），
+       以及判断"换批序号该不该归零"（周期变了就归零）。
+       label 直接铺在卡头，说清"这一批是哪一段的"。 */
+    _reviewPeriod() {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const todayKey = this._calKey(today);
+      const md = (d) => `${d.getMonth() + 1}月${d.getDate()}日`;
+      const cadence = this._reviewCadence();
+      if (cadence === "week") {
+        const start = this._calTabWeekStartDate(today);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        return {
+          key: `w${this._calKey(start)}`,
+          label: `本周 · ${md(start)} - ${md(end)}`,
+          unit: "周",
+          todayKey,
+        };
+      }
+      if (cadence === "month") {
+        return {
+          key: `m${todayKey.slice(0, 7)}`,
+          label: `本月 · ${today.getFullYear()}年${today.getMonth() + 1}月`,
+          unit: "月",
+          todayKey,
+        };
+      }
+      if (cadence === "3d") {
+        /* 按「距 1970 的天数 / 3」分块：滚动三天，不跟自然周对齐
+           （周已经有自己的档，不必再造一个"周一起算的三天"）。 */
+        const epoch = Math.floor(
+          Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 86400000
+        );
+        const idx = Math.floor(epoch / 3);
+        const start = new Date(today);
+        start.setDate(start.getDate() - (epoch - idx * 3));
+        const end = new Date(start);
+        end.setDate(end.getDate() + 2);
+        return {
+          key: `d3-${idx}`,
+          label: `这三天 · ${md(start)} - ${md(end)}`,
+          unit: "三天",
+          todayKey,
+        };
+      }
+      return { key: `d${todayKey}`, label: `今天 · ${md(today)}`, unit: "天", todayKey };
+    }
+
+    /* 回顾的候选池：今天之前的记录，按「回顾范围」收窄。
+       几条刻意的取舍：
+         · 排除今天 —— 今天刚写的还没到回看的时候；
+         · 只要内容非空 —— 空内容的记录翻出来只有一行时间，没有回看价值；
+         · 范围按「距今天数」算，不按自然年 —— 「近一年」对 12 月 31 日
+           和 1 月 1 日应该是同一个长度，按年份切会在年初突然只剩几天。 */
+    _reviewPool() {
+      /* 顶栏的类型筛选 / 「只看任务」也管这一张卡：
+         工作台上其它记录类卡片都跟着筛，回顾卡要是照旧全量翻，
+         筛了「阅读」却在回顾里看见「记录」，读起来就像筛错了。 */
+      const all = this._reviewSourceRecords();
+      const now = new Date();
+      const todayKey = this._calKey(now);
+      if (!Array.isArray(all) || !all.length) return { pool: [], todayKey };
+      const scope = this._reviewScope();
+      let fromKey = "";
+      if (scope === "1y" || scope === "3y") {
+        const from = new Date(now);
+        from.setFullYear(from.getFullYear() - (scope === "1y" ? 1 : 3));
+        fromKey = this._calKey(from);
+      }
+      const pool = all.filter((r) => {
+        if (!r || !r.date) return false;
+        /* 只认 YYYY-MM-DD：坏日期参与字符串比较会把整池筛空 */
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(r.date)) return false;
+        if (r.date >= todayKey) return false;
+        if (fromKey && r.date < fromKey) return false;
+        return String(r.content == null ? "" : r.content).trim() !== "";
+      });
+      return { pool, todayKey };
+    }
+
+    /* 回顾的取数：记录那份缓存（与指标同理，文档数据源的 content 是标题，
+       翻标题没有意义），再按顶栏选中的类型 / 只看任务收窄。
+       筛选逻辑与 _calTabFilteredRecords 同一口径，只是数据源固定为记录。 */
+    _reviewSourceRecords() {
+      const all = this._metricRecords();
+      if (!Array.isArray(all) || !all.length) return [];
+      const picked = this._calTabTypeFilter;
+      const hasTypeFilter = !!(picked && picked.size);
+      const taskOnly = !!this._calTabTaskOnly && this._taskTypes().length > 0;
+      if (!hasTypeFilter && !taskOnly) return all;
+      return all.filter((r) => {
+        if (!r) return false;
+        if (taskOnly && !this._isTaskRecord(r)) return false;
+        if (hasTypeFilter && !picked.has(String(r.type || "").trim())) return false;
+        return true;
+      });
+    }
+
+    /* 「同期」的容差（天）：周期越长，允许的日期偏差越大。
+       每天 = 同月同日；三天 = 前后各 1 天；每周 = 前后各 3 天；
+       每月 = 前后各 15 天。这样"去年这一周"能真的捞出整周，
+       而不是只有恰好同月同日的那一天。 */
+    _reviewSameTolerance() {
+      const c = this._reviewCadence();
+      return c === "month" ? 15 : c === "week" ? 3 : c === "3d" ? 1 : 0;
+    }
+
+    /* 挑出这一批要回顾的那几条。
+       顺序：先取「往年同期」，不够再从池子里随机补齐。
+       随机走 seededRandom，种子 = 周期 key + 换批序号 —— 所以
+         · 同一周期、同一批序号，刷新多少次都是同一组（不会一晃就变）；
+         · 点「换一批」把序号 +1，才换一组；
+         · 周期换了（跨天 / 跨周 / 跨月），序号自动归零、重新起一批。 */
+    _reviewPicks() {
+      const { pool, todayKey } = this._reviewPool();
+      const period = this._reviewPeriod();
+      const n = this._reviewCount();
+      if (!pool.length)
+        return { picks: [], todayKey, poolSize: 0, period };
+      /* 换批序号按周期计：上个周期点过几次「换一批」不该带到这一批 ——
+         否则一进新周期看到的就不是"这一批"，而是接着上一批的序号。
+         所以序号旁边存一个周期 key，key 变了就归零。 */
+      const round =
+        this._reviewRoundDay === period.key
+          ? Math.max(0, Math.round(Number(this._reviewRound) || 0))
+          : 0;
+      /* 往年同期：同月同日（按周期放宽成前后几天），且必须是往年的记录 ——
+         不加年份这一条的话，"每月"档会把上个月的记录也算成同期。 */
+      const tol = this._reviewSameTolerance();
+      const doy = mdToDoy(todayKey.slice(5));
+      const year = todayKey.slice(0, 4);
+      const sameDay = pool.filter((r) => {
+        if (r.date.slice(0, 4) >= year) return false;
+        const d = mdToDoy(r.date.slice(5));
+        if (d < 0 || doy < 0) return false;
+        /* 跨年边界（1 月 1 日往前、12 月 31 日往后）按 365 天折回，
+           否则"每月 ±15 天"在元旦那几天会突然一条都捞不到 */
+        let diff = Math.abs(d - doy);
+        if (diff > 182) diff = 365 - diff;
+        return diff <= tol;
+      });
+      const picked = [];
+      const used = new Set();
+      const take = (r) => {
+        if (!r || used.has(r.id)) return;
+        used.add(r.id);
+        picked.push(r);
+      };
+      /* 第一轮：同期里按种子打散后取（同期可能有好几年的记录）。
+         **只在第一批（round 0）优先同期**：同期够 n 条时，如果每一批都先塞满同期，
+         「换一批」就永远只能在同样那几条里换顺序（再按日期排一下，连顺序都一样），
+         点了像没反应。所以换过批之后就放开手，从全池里随机 —— 这也正好是
+         「今天先看那年今日，想看别的就再抽一次」的读法。 */
+      if (round === 0) {
+        const rnd = seededRandom(reviewSeed(`${period.key}#0#same`));
+        seededShuffle(sameDay, rnd).forEach((r) => {
+          if (picked.length < n) take(r);
+        });
+      }
+      /* 第二轮：还不够就从全池补齐。同样用种子洗牌，
+         保证「同一周期同一批」的结果稳定。 */
+      if (picked.length < n) {
+        const rnd2 = seededRandom(reviewSeed(`${period.key}#${round}#rest`));
+        seededShuffle(
+          pool.filter((r) => !used.has(r.id)),
+          rnd2
+        ).forEach((r) => {
+          if (picked.length < n) take(r);
+        });
+      }
+      /* 展示顺序按日期 + 时间倒序（最近的在前），读起来比随机顺序自然 */
+      picked.sort((a, b) =>
+        `${b.date} ${b.time || ""}`.localeCompare(`${a.date} ${a.time || ""}`)
+      );
+      return { picks: picked, todayKey, poolSize: pool.length, period };
+    }
+
+    /* 「回顾足迹」那张卡：把候选池按年分桶，画成一组柱。
+       为什么值得单开一张，而不是再列一遍记录：上面那张是**随机翻到的几条**，
+       这张说的是**池子本身长什么样** —— 哪几年写得勤、哪几年几乎空着。
+       两个信息不重叠：抽到的那几条看内容，这张看分布。
+       （先试过把「历年同期」逐条列出来，可每天通常只有一条，
+       结果和上面那张一字不差，看着像渲染了两次，所以改成看分布。） */
+    _reviewFootprint() {
+      const { pool } = this._reviewPool();
+      const byYear = new Map();
+      pool.forEach((r) => {
+        const y = Number(String(r.date).slice(0, 4));
+        if (!y) return;
+        byYear.set(y, (byYear.get(y) || 0) + 1);
+      });
+      const years = Array.from(byYear.entries())
+        .map(([year, count]) => ({ year, count }))
+        .sort((a, b) => a.year - b.year);
+      if (!years.length) return { years: [], total: 0, max: 0, first: null };
+      const max = years.reduce((m, y) => Math.max(m, y.count), 0);
+      /* 最早的一条：足迹卡底部那句「最早一条」，点它直接跳过去 */
+      const first = pool
+        .slice()
+        .sort((a, b) =>
+          `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`)
+        )[0];
+      return { years, total: pool.length, max, first };
+    }
+
+    /* 渲染「回顾足迹」。池子为空时返回空串（新用户不该看到一张空柱图）。 */
+    _buildReviewFootprintHtml() {
+      if (!this._reviewOn()) return "";
+      const { years, total, max, first } = this._reviewFootprint();
+      if (!years.length) return "";
+      /* 年份太多时只画最近 12 根：再往前一根柱子只剩一两个像素，
+         读不出差别，反而把卡撑得很宽。省掉的那几年在副标题里交代清楚。 */
+      const shown = years.slice(-12);
+      const hidden = years.length - shown.length;
+      const curYear = new Date().getFullYear();
+      /* 横条而不是竖柱：年份通常只有 3~8 个，竖柱铺在整宽的卡里
+         要么挤成一堆、要么被拉开到两头，中间空得像缺数据；
+         横条天然吃满宽度，年份名也有地方写全（竖柱下面只能塞「23」）。
+         读法与「类型时长汇总」那几行一致，同一屏不用换脑子。
+         条长走**线性**：这张卡要说的就是"哪年多"，比例失真反而读不出来；
+         另给 2% 的底，1 条也留一小段，不至于缩成看不见的线。 */
+      const bars = shown
+        .map((y) => {
+          const w = Math.max(2, Math.round((y.count / max) * 100));
+          return `<div class="north-caltab-fp-row${
+            y.year === curYear ? " is-cur" : ""
+          }" data-tip="${y.year} 年 · ${y.count} 条"><span class="north-caltab-fp-year">${
+            y.year
+          }</span><span class="north-caltab-fp-track"><i style="width:${w}%"></i></span><span class="north-caltab-fp-num">${
+            y.count
+          }</span></div>`;
+        })
+        .join("");
+      return `<div class="north-caltab-board-card north-caltab-fp">
+            <div class="north-caltab-board-cardhead">
+                <span class="north-caltab-board-cardtitle">回顾足迹</span>
+                <span class="north-caltab-board-cardsub">${
+                  hidden > 0 ? `更早还有 ${hidden} 年 · ` : ""
+                }共 ${total} 条 · 跨 ${years.length} 年</span>
+            </div>
+            <div class="north-caltab-fp-chart">${bars}</div>
+            ${
+              first
+                ? `<div class="north-caltab-fp-foot"><button class="north-caltab-fp-first" type="button" data-caltab-act="reviewopen" data-cal-id="${escapeHtml(
+                    first.id || ""
+                  )}" data-tip="打开这一条">最早一条 · ${escapeHtml(
+                    first.date
+                  )}</button></div>`
+                : ""
+            }
+        </div>`;
+    }
+
+    /* 「N 年前」这种相对说法：同一年只写「今年」，其余给年数 */
+    _reviewAgoLabel(dateKey) {
+      const y = Number(String(dateKey || "").slice(0, 4));
+      if (!y) return "";
+      const diff = new Date().getFullYear() - y;
+      if (diff <= 0) return "今年";
+      return `${diff} 年前`;
+    }
+
+    /* 渲染「回顾」卡。
+       关掉开关时不再返回空串 —— 它现在是工作台的一个分类，
+       整页空着会像坏了；给一张说明卡，顺手把入口指到设置里。 */
+    _buildReviewHtml() {
+      if (!this._reviewOn()) {
+        return `<div class="north-caltab-board-card north-caltab-review">
+            <div class="north-caltab-board-cardhead">
+                <span class="north-caltab-board-cardtitle">回顾</span>
+            </div>
+            <div class="north-caltab-board-empty">回顾关着。去「设置 → 回顾设置」打开，这里就会开始翻旧账。<br><button class="north-caltab-habit-empty-btn" type="button" data-caltab-act="settings" data-settings-group="review">去设置</button></div>
+        </div>`;
+      }
+      const { picks, poolSize, period } = this._reviewPicks();
+      const head = `<div class="north-caltab-board-cardhead">
+            <span class="north-caltab-board-cardtitle">回顾</span>
+            <span class="north-caltab-board-cardsub">${
+              poolSize ? `${escapeHtml(period.label)} · 共 ${poolSize} 条旧记录` : "还没有可回顾的记录"
+            }</span>
+        </div>`;
+      if (!picks.length) {
+        /* 空态分两种：一条旧记录都没有，和"有记录但被筛 / 被范围排掉了"。
+           后者要是也说"写几天记录吧"，用户会以为记录丢了。 */
+        const hasAny = this._metricRecords().length > 0;
+        return `<div class="north-caltab-board-card north-caltab-review">
+            ${head}
+            <div class="north-caltab-board-empty">${
+              hasAny
+                ? "这个范围里还没有可回顾的记录，换个类型筛选或把「回顾范围」放宽看看"
+                : "写几天记录，这里就会开始翻旧账了"
+            }</div>
+        </div>`;
+      }
+      const rows = picks
+        .map((r) => {
+          const color = this._calRecordColor(r) || DEFAULT_TYPE_COLOR;
+          const isTask = this._isTaskRecord(r);
+          const done = !!r.done;
+          return `<button class="north-caltab-review-item${
+            done ? " is-done" : ""
+          }" type="button" style="--tt-c:${escapeHtml(color)}" data-caltab-act="reviewopen" data-cal-id="${escapeHtml(
+            r.id || ""
+          )}" data-tip="${escapeHtml(
+            `${r.date} ${r.time || ""} · ${r.type || ""}`
+          )}">
+                <span class="north-caltab-review-date">
+                    <b>${escapeHtml(this._reviewAgoLabel(r.date))}</b>
+                    <i>${escapeHtml(String(r.date).slice(5))}</i>
+                </span>
+                <span class="north-caltab-review-body">
+                    <span class="north-caltab-review-meta">${
+                      /* 只给「已完成」画一枚勾。回顾卡里的方框不可点，
+                         画出来会被当成复选框去戳（戳了没反应，像是坏了）；
+                         一枚勾只表达"这条当时已经完成"，不暗示任何交互。 */
+                      isTask && done
+                        ? this._taskCheckSvg("north-caltab-review-tick", 11)
+                        : ""
+                    }<span class="north-caltab-review-type">${escapeHtml(
+                      r.type || ""
+                    )}</span><span class="north-caltab-review-time">${escapeHtml(
+                      r.time || ""
+                    )}</span></span>
+                    <span class="north-caltab-review-text">${escapeHtml(
+                      this._brToSpace(r.content)
+                    )}</span>
+                </span>
+            </button>`;
+        })
+        .join("");
+      return `<div class="north-caltab-board-card north-caltab-review">
+            ${head}
+            <div class="north-caltab-review-list">${rows}</div>
+            <div class="north-caltab-review-foot">
+                <span class="north-caltab-review-hint">每${escapeHtml(
+                  period.unit
+                )}固定这一批 · 想看别的就换一批</span>
+                <button class="north-caltab-board-todaymini" type="button" data-caltab-act="reviewnext">换一批</button>
+            </div>
+        </div>`;
+    }
+
     /* 指标可绑定的记录类型：默认「不限」，候选只列**数据里真实出现过的**类型，
        外加这条指标自己已经存过的那个（最近没记录也还在）。
        不让手打 —— 类型是自由文本，写偏一个字符就静默漏数据。 */
@@ -3990,9 +4724,17 @@
       /* 顶栏那枚「全部类型」在指标视图里也照常管用：先按选中的类型过一遍记录，
          后面的取数、脚注统计都基于筛过之后的这一份 */
       const picked = this._calTabTypeFilter;
-      const records = picked && picked.size
-        ? this._metricRecords().filter((r) => picked.has(String((r && r.type) || "").trim()))
-        : this._metricRecords();
+      /* 「任务」开关同样管用：指标是从记录内容里抽数值的，
+         只看任务 = 只从任务类型的记录里抽。两个条件是与关系。 */
+      const taskOnly =
+        !!this._calTabTaskOnly && this._taskTypes().length > 0;
+      const records = this._metricRecords().filter((r) => {
+        if (!r) return false;
+        if (taskOnly && !this._isTaskRecord(r)) return false;
+        if (picked && picked.size && !picked.has(String(r.type || "").trim()))
+          return false;
+        return true;
+      });
       const window = this._metricWindow(records);
       const groups = [];
       all.forEach((x) => {
@@ -4809,7 +5551,7 @@
 
     /* 打开「设置」弹窗：把侧边栏 Dock 里的设置视图抽出来，做成截图那种
        「左侧导航 + 右侧内容」的原生设置版式（对齐思源设置弹窗的版式）。
-       内容直接复用 _mountSettingsPanel()：它按 4 个分组构建 .tt-settings，
+       内容直接复用 _mountSettingsPanel()：它按 8 个分组构建 .tt-settings，
        这里按分组只显示其中一组；搜索时跨分组过滤行。
 
        层级刻意比类型管理弹窗（.tt-modal，9999）低 —— 设置里的「类型管理」
@@ -4820,9 +5562,10 @@
         this._settingsModal.remove();
         this._settingsModal = null;
       }
-      /* 左侧导航 = 右侧那五个分组本身，点某一项只显示该分组。
+      /* 左侧导航 = 右侧那几个分组本身，点某一项只显示该分组。
          key 必须与 _mountSettingsPanel 里 .tt-group__card 的 data-tt-group
-         取值一一对应（insert / appearance / calendar / control / habit），
+         取值一一对应（insert / appearance / calendar / task / control /
+         habit / metric / review），
          对应关系是反查出来的，不依赖分组在 DOM 里的先后顺序。
          icon 一律用思源自带的图标 id（清单见 appearance/icons/<主题>/icon.js），
          写错 id 会渲染成一个空框。 */
@@ -4830,9 +5573,11 @@
         { key: "insert", label: "插入设置", icon: "iconEdit" },
         { key: "appearance", label: "视图外观", icon: "iconEye" },
         { key: "calendar", label: "日历设置", icon: "iconCalendar" },
+        { key: "task", label: "任务设置", icon: "iconCheck" },
         { key: "control", label: "控制设置", icon: "iconSettings" },
         { key: "habit", label: "习惯设置", icon: "iconStar" },
         { key: "metric", label: "指标设置", icon: "iconGraph" },
+        { key: "review", label: "回顾设置", icon: "iconHistory" },
       ];
       const modal = document.createElement("div");
       modal.className = "tt-settings-modal";
@@ -5700,6 +6445,9 @@
         const aTime = this._attr("time");
         const aType = this._attr("type");
         const aContent = this._attr("content");
+        /* 完成状态用 LEFT JOIN：绝大多数记录还没有这个属性，
+           用 INNER JOIN 会把它们整批筛掉。 */
+        const aDone = this._attr(TASK_DONE_KEY);
         /* rb 是记录所在的那篇**文档**（记录都住在当天的日记文档里）。
            只多读 content 与 ial 两列：content 当文档标题、ial 里抠文档图标，
            表格视图的「日期带」要用图标颜色上色（icon 取色走 _iconColorOf）。
@@ -5710,12 +6458,14 @@
                             a1.value AS tt_date,
                             a2.value AS tt_time,
                             a3.value AS tt_type,
-                            a4.value AS tt_content
+                            a4.value AS tt_content,
+                            a5.value AS tt_done
                      FROM blocks b
                      INNER JOIN attributes a1 ON b.id = a1.block_id AND a1.name = '${aDate}'
                      INNER JOIN attributes a2 ON b.id = a2.block_id AND a2.name = '${aTime}'
                      INNER JOIN attributes a3 ON b.id = a3.block_id AND a3.name = '${aType}'
                      INNER JOIN attributes a4 ON b.id = a4.block_id AND a4.name = '${aContent}'
+                     LEFT JOIN attributes a5 ON b.id = a5.block_id AND a5.name = '${aDone}'
                      LEFT JOIN blocks rb ON rb.id = b.root_id
                      WHERE b.type = 'p'
                      ORDER BY a1.value DESC, a2.value DESC, b.id
@@ -5731,6 +6481,8 @@
             date: (row.tt_date || "").trim().replace(/\//g, "-"),
             time: (row.tt_time || "").trim(),
             type: (row.tt_type || "").trim(),
+            /* 完成状态：只有明确写成 "1" 才算完成 */
+            done: String(row.tt_done || "").trim() === "1",
             /* 刻意不叫 icon / color：那两个字段表示「记录自己的」图标与颜色，
                _iconHint() 与 _calRecordColor() 都会读它们；这里装的是「记录所在文档的」，
                混用会让每条记录的悬停气泡都多出一个文档表情、还会把记录的类型色顶掉。
@@ -5962,8 +6714,22 @@
     _calTabFilteredRecords() {
       const all = this._calSourceRecords() || [];
       const picked = this._calTabTypeFilter;
-      if (!picked || picked.size === 0) return all;
-      return all.filter((r) => r && picked.has(((r && r.type) || "").trim()));
+      const hasTypeFilter = !!(picked && picked.size);
+      /* 任务开关只在「真配了任务类型 + 数据源是记录」时才算数：
+         否则开关残留成 true 会把整屏筛成空的（比如刚把最后一个任务类型取消掉）。 */
+      const taskOnly =
+        !!this._calTabTaskOnly &&
+        this._taskTypes().length > 0 &&
+        this._calSource() !== "docs";
+      /* 「只看任务」与类型筛选是**与**关系：先按任务收窄，再按勾选的类型收窄。
+         两个条件都空时直接返回原数组（不复制），保持旧路径的开销。 */
+      if (!hasTypeFilter && !taskOnly) return all;
+      return all.filter((r) => {
+        if (!r) return false;
+        if (taskOnly && !this._isTaskRecord(r)) return false;
+        if (hasTypeFilter && !picked.has(((r && r.type) || "").trim())) return false;
+        return true;
+      });
     }
 
     /* 筛选面板里能选的类型：取日历数据里**实际出现过**的类型，带各自配色。
@@ -5992,6 +6758,80 @@
       if (!picked || picked.size === 0) return "全部类型";
       if (picked.size === 1) return Array.from(picked)[0];
       return `${picked.size} 个类型`;
+    }
+
+    /* ===================== 任务类型 ===================== */
+
+    /* 声明成「任务」的类型名单（设置里挑的，存 settings.taskTypes） */
+    _taskTypes() {
+      /* 月视图一屏要判 126 格 × 最多 5 条，逐条归一化会白造一堆数组；
+         按「数组身份」缓存一份就够 —— 设置里一改就换新数组，缓存自然失效。 */
+      const src = this.data && this.data.taskTypes;
+      const cache = this._taskTypeCache;
+      if (cache && cache.src === src) return cache.list;
+      const list = normTaskTypes(src);
+      this._taskTypeCache = { src, list };
+      return list;
+    }
+
+    /* 这条记录算不算任务：只看它所属的类型有没有被声明成任务。
+       数据源是「创建的文档」时一律不算 —— 文档没有类型这回事，
+       与其按标题瞎猜，不如老实返回 false，免得任务卡长在文档上。 */
+    _isTaskRecord(r) {
+      if (!r) return false;
+      if (this._calSource() === "docs") return false;
+      const name = String(r.type == null ? "" : r.type).trim();
+      if (!name) return false;
+      return this._taskTypes().indexOf(name) >= 0;
+    }
+
+    /* 任务框左侧那枚复选框 —— **圆角方形**，不是圆形（圆框是「单选框」的语义，
+       在日历里还容易被误读成「时间点」）。三档形态：
+         boxed=false        只画一条圆头勾（顶栏按钮 / 设置芯片这类窄位置用）
+         boxed=true, done=false  空心方框：描边跟着类型色，里面留白（默认态）
+         boxed=true, done=true   完成态：方框填类型色、勾反白，标题由 CSS 划掉
+        描边 / 填充一律 currentColor + 各自的透明度，颜色交给 CSS 决定，
+        所以浅类型色（默认灰）在深色主题下也不会消失。
+
+        未完成态 = 「一块比卡片深一档的色块」，**没有描边**：
+          · 填充 10% 类型色 —— 注意它**叠在**任务卡 12% 的底上，
+            合成后约 21%，只比卡片深 9 个百分点：看着像同一块底色里
+            凹下去的一格，而不是贴上去的外框；
+            再往上加（试过 20% → 合成约 30%）就成了「一块明显更蓝的砖」，
+            正是用户说的「颜色还是太重」；
+          · 完全去掉描边：描边是「边框太重 / 跟背景不搭」的唯一来源。
+            形状靠这块比底色深一点的圆角方块自己表达，边缘由填充的自然
+            渐变收口，深浅主题、任意类型色都不会出现一条突兀的深色线。
+          之前是 10% 填充 + 42% 描边，描边远重于填充，所以读起来是「框」
+          而不是「块」，也正是用户说的「边框颜色重、没跟背景融合」。
+        rx=5.4 / 24 换算到 16px 约 3.6px —— **必须还是个方框**：
+        圆角一大就会被读成圆形复选框（那是单选框 / 时间点的语义），
+        留一点点圆只是让转角不扎眼，不是为了"圆"。
+
+        完成态 = **只剩一枚勾，方框整个消失**（对齐参考图）：
+        底色里那格凹槽填平了，只剩类型色的一笔勾 + 变灰的标题。
+        勾的浓度交给 CSS（.north-caltab-taskicon.is-done 的 opacity），
+        这里只负责把笔画画粗一点、端点磨圆，让它在淡底上还看得清。 */
+    _taskCheckSvg(cls, size, boxed, done) {
+      const s = size || 11;
+      if (!boxed) {
+        return `<svg class="${cls}" viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true"><path d="M7.2 12.3l3.3 3.3 6.4-6.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+      }
+      if (done) {
+        return `<svg class="${cls} is-done" viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true"><path d="M5.6 12.7l4 4.1 8.8-9.5" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+      }
+      return `<svg class="${cls}" viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true"><rect x="1.4" y="1.4" width="21.2" height="21.2" rx="5.4" fill="currentColor" fill-opacity="0.1"></rect></svg>`;
+    }
+
+    /* 任务完成后挂在标题后面那枚「已完成」小胶囊（参考 pinch 的做法）。
+       单独一个元素、不靠 CSS ::after，原因是划掉的效果：
+       text-decoration 会往子元素传播且无法在子元素上撤销，
+       用伪元素写「已完成」会被父级的删除线一起划掉，看着像没完成。
+       所以文字和徽标必须是两个兄弟节点，删除线只落在文字上。
+       颜色跟任务卡同源：类型色淡底 + 类型色偏淡的字，
+       深浅主题都不用另写分支。 */
+    _taskDoneBadge() {
+      return `<span class="north-caltab-donebadge">已完成</span>`;
     }
 
     /* 日历标签页用：按设置里的数据源归组，再过一遍类型筛选。
@@ -7165,6 +8005,8 @@
 
         const r = x.record;
         const c = this._calRecordColor(r);
+        const isTask = this._isTaskRecord(r);
+        const done = !!(r && r.done);
         const hint = this._iconHint(r);
         const tip = `${r.time || ""} ${r.type || ""}：${this._brToSpace(r.content)}${hint ? ` (${hint})` : ""}`.trim();
         const style = `top:${top.toFixed(1)}px;height:${height.toFixed(1)}px${
@@ -7186,13 +8028,28 @@
            那两处一行里塞不下类型，硬加会把内容挤没。
            没有类型的记录不补分隔符，免得出现孤零零一个「| 内容」。 */
         const titleSpan = `<span class="north-caltab-wv-event-title">${
+          isTask
+            ? `<button class="north-caltab-taskbox" type="button" data-caltab-taskdone="${escapeHtml(
+                r.id || ""
+              )}" data-done="${done ? "1" : ""}" aria-pressed="${
+                done ? "true" : "false"
+              }" data-tip="${done ? "标记为未完成" : "标记为完成"}">${this._taskCheckSvg(
+                "north-caltab-taskicon",
+                14,
+                true,
+                done
+              )}</button>`
+            : ""
+        }<span class="north-caltab-wv-event-titletext">${
           this._calShowType() && r.type ? `${escapeHtml(r.type)} | ` : ""
-        }${escapeHtml(r.content || "")}</span>`;
+        }${escapeHtml(r.content || "")}</span>${done ? this._taskDoneBadge() : ""}</span>`;
         return `<div class="north-caltab-wv-event${
           compact ? " is-compact" : ""
-        }" style="${style}" data-cal-id="${escapeHtml(r.id || "")}" data-tip="${escapeHtml(
-          tip
-        )}">${compact ? timeSpan + titleSpan : titleSpan + timeSpan}</div>`;
+        }${isTask ? " is-task" : ""}${
+          done ? " is-done" : ""
+        }" style="${style}" data-cal-id="${escapeHtml(
+          r.id || ""
+        )}" data-tip="${escapeHtml(tip)}">${compact ? timeSpan + titleSpan : titleSpan + timeSpan}</div>`;
       });
     }
 
@@ -7454,6 +8311,8 @@
                 r.content
               )}${hint ? ` (${hint})` : ""}`.trim();
               const typeName = (r.type || "").trim();
+              const isTask = this._isTaskRecord(r);
+              const done = !!(r && r.done);
               /* 时间列：能算出区间就给区间（与时间轴同一口径）；
                  当天首 / 末条没有参照，只写记录里那个节点时间，不编端点出来 */
               const timeText = !x.range
@@ -7461,21 +8320,38 @@
                 : x.hasRange
                 ? `${this._fmtMin(x.start)} - ${this._fmtMin(x.end)}`
                 : this._fmtMin(x.range.start);
-              return `<tr class="north-caltab-table-row"${
-                r.id ? ` data-cal-id="${escapeHtml(r.id)}"` : ""
-              } data-tip="${escapeHtml(tip)}">
+              return `<tr class="north-caltab-table-row${isTask ? " is-task" : ""}${
+                done ? " is-done" : ""
+              }"${r.id ? ` data-cal-id="${escapeHtml(r.id)}"` : ""} data-tip="${escapeHtml(
+                tip
+              )}">
                         <td class="north-caltab-table-time">${escapeHtml(timeText)}</td>
                         <td class="north-caltab-table-type">${
                           typeName
                             ? `<span class="north-caltab-table-typepill" style="--tt-c:${
                                 c || DEFAULT_TYPE_COLOR
-                              }">${escapeHtml(typeName)}</span>`
+                              }">${
+                                isTask
+                                  ? `<button class="north-caltab-taskbox" type="button" data-caltab-taskdone="${escapeHtml(
+                                      r.id || ""
+                                    )}" data-done="${done ? "1" : ""}" aria-pressed="${
+                                      done ? "true" : "false"
+                                    }" data-tip="${
+                                      done ? "标记为未完成" : "标记为完成"
+                                    }">${this._taskCheckSvg(
+                                      "north-caltab-taskicon",
+                                      12,
+                                      true,
+                                      done
+                                    )}</button>`
+                                  : ""
+                              }${escapeHtml(typeName)}</span>`
                             : `<span class="north-caltab-table-none">—</span>`
                         }</td>
-                        <td class="north-caltab-table-content">${this._calTableHighlight(
+                        <td class="north-caltab-table-content"><span class="north-caltab-table-contenttext">${this._calTableHighlight(
                           this._brToSpace(r.content || ""),
                           this._calTabTableSearch
-                        )}</td>
+                        )}</span>${done ? this._taskDoneBadge() : ""}</td>
                         <td class="north-caltab-table-dur">${
                           x.dur ? this._fmtStatsDur(x.dur) : "—"
                         }</td>
@@ -7534,6 +8410,17 @@
         }
       });
       return list;
+    }
+
+    /* 这一屏真正要铺的习惯名单 = 设置里挑中的 ∩ 「只看任务」。
+       单独一个方法，是因为除了主列表，**前置关系图**也要用同一份 ——
+       否则筛掉的习惯会从卡片里消失、却还留在关系图上，
+       看着像"筛了个寂寞"。 */
+    _habitShownTypes() {
+      const all = this._habitTypes();
+      const taskTypes = this._taskTypes();
+      if (!this._calTabTaskOnly || !taskTypes.length) return all;
+      return all.filter((t) => taskTypes.indexOf(t) >= 0);
     }
 
     /* 某个习惯的目标模型：{ unit, dir, period, goalUnit, goal, alias, group }。
@@ -7952,7 +8839,8 @@
     _habitPreList(type) {
       const cfg = this.data.habitConfig && this.data.habitConfig[type];
       const raw = cfg && Array.isArray(cfg.pre) ? cfg.pre : [];
-      const all = this._habitTypes();
+      /* 名单口径跟这一屏一致：被「任务」筛掉的习惯不该还挂在关系图上 */
+      const all = this._habitShownTypes();
       const seen = new Set();
       const list = [];
       raw.forEach((n) => {
@@ -7967,7 +8855,7 @@
 
     /* 反向：谁把 type 当前置习惯（同样只认还在追踪的习惯） */
     _habitPostList(type) {
-      return this._habitTypes().filter(
+      return this._habitShownTypes().filter(
         (t) => t !== type && this._habitPreList(t).indexOf(type) >= 0
       );
     }
@@ -7994,6 +8882,8 @@
 
     /* 写回某个习惯的前置名单（走 _habitSetConfig，与其它习惯配置一起落盘） */
     _habitSetPre(type, list) {
+      /* 写回时按**全量**习惯校验：任务筛选只是"这一屏怎么看"，
+         不能因为它把用户配好的前置关系悄悄删掉。 */
       const all = this._habitTypes();
       const seen = new Set();
       const next = [];
@@ -8129,7 +9019,9 @@
 
     /* 习惯视图里那一整块「前置习惯」关系图。 */
     _habitChainSectionHtml() {
-      const types = this._habitTypes();
+      /* 与卡片列表同一份名单（含「只看任务」的收窄），
+         否则筛掉的习惯还会留在图上，看着像筛漏了 */
+      const types = this._habitShownTypes();
       if (!types.length) return "";
       const sicon = (id) =>
         `<svg class="north-caltab-habit-sicon" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><use xlink:href="#${id}"></use></svg>`;
@@ -8149,14 +9041,24 @@
 
       /* 只有一个习惯时连不成关系（自己不能当前置）：给一句说明就收工 */
       if (types.length < 2) {
+        /* 被「任务」筛到只剩一个时，别让人以为习惯配少了 ——
+           真正的原因在这一屏的筛选上，提示语要说对地方。 */
+        const byTask =
+          !!this._calTabTaskOnly && this._habitTypes().length > types.length;
         return `<div class="north-caltab-chain">
                 <div class="north-caltab-chain-head">
                     <span class="north-caltab-chain-title">${sicon(
                       "iconGraph"
                     )}前置习惯</span>
-                    <span class="north-caltab-chain-sub">至少两个习惯才能连成关系</span>
+                    <span class="north-caltab-chain-sub">${
+                      byTask ? "当前只看任务，只剩一个习惯" : "至少两个习惯才能连成关系"
+                    }</span>
                 </div>
-                <div class="north-caltab-chain-note">关系图至少要两个习惯：一个总也养不成的目标习惯，加几个能替它开路的「前置习惯」。去「设置 → 习惯设置」里再挑一个类型吧。</div>
+                <div class="north-caltab-chain-note">${
+                  byTask
+                    ? "关系图至少要两个习惯。再点一次「任务」看全部习惯，或者把另一个习惯类型也标成任务。"
+                    : "关系图至少要两个习惯：一个总也养不成的目标习惯，加几个能替它开路的「前置习惯」。去「设置 → 习惯设置」里再挑一个类型吧。"
+                }</div>
             </div>`;
       }
 
@@ -9963,11 +10865,16 @@
       /* 指标固定读「记录」那份数据（不看日历数据源设置），顶栏类型筛选照常管用 ——
          与指标视图同一套口径，这样两处的曲线对得上。 */
       const metrics = this._metrics();
-      const metricRecords = picked && picked.size
-        ? this._metricRecords().filter((r) =>
-            picked.has(String((r && r.type) || "").trim())
-          )
-        : this._metricRecords();
+      /* 与指标视图同一套：类型筛选 + 「只看任务」都是与关系 */
+      const boardTaskOnly =
+        !!this._calTabTaskOnly && this._taskTypes().length > 0;
+      const metricRecords = this._metricRecords().filter((r) => {
+        if (!r) return false;
+        if (boardTaskOnly && !this._isTaskRecord(r)) return false;
+        if (picked && picked.size && !picked.has(String(r.type || "").trim()))
+          return false;
+        return true;
+      });
       const metricWindow = win;
       this._boardChartCache = new Map();
       let boardMetricHtml;
@@ -10043,6 +10950,10 @@
          这里是对象字面量：写重了不会报错，后一个会把前一个悄悄吃掉。
          （习惯那张「趋势 + 环比」= trendDelta；记录那张「每日走势」= trendLine。） */
       const blockHtml = {
+        reviewCard: this._buildReviewHtml(),
+        reviewFoot: this._buildReviewFootprintHtml(),
+        taskStats: this._buildTaskStatsHtml(win, rangeLabel),
+        taskRhythm: this._buildTaskRhythmHtml(win, rangeLabel),
         trendDelta: trendHtml,
         habitGrid: habitHtml,
         cards: stats.cards,
@@ -10106,12 +11017,208 @@
       });
     }
 
+    /* ===================== 任务统计（工作台「任务」分类） =====================
+       只看「被标成任务的那些类型」的记录。两条刻意的边界：
+         · 数据源是「创建的文档」时整块不出现 —— 文档没有完成状态，
+           硬凑一个完成率只会是假的；
+         · 没配任务类型时给一张引导卡，而不是空着（空着像坏了）。
+       ─────────────────────────────────────────────────────────── */
+
+    /* 这一段里被标成任务的记录（已按当前类型筛选 / 只看任务过一遍）。
+       与其它卡片同一口径：走 _calTabFilteredRecords()，
+       所以顶栏筛了「阅读」、这里就只数阅读里的任务。 */
+    _taskBoardRecords(win) {
+      if (this._calSource() === "docs") return [];
+      const all = this._calTabFilteredRecords() || [];
+      if (!this._taskTypes().length) return [];
+      /* win.from / win.to 是 YYYY-MM-DD 键，而 _filterLifeLogDockByRange
+         收的是 Date —— 这里转一次，别把字符串直接塞进去。 */
+      const inWin = this._filterLifeLogDockByRange(
+        all,
+        new Date(`${win.from}T00:00:00`),
+        new Date(`${win.to}T00:00:00`)
+      );
+      return inWin.filter((r) => this._isTaskRecord(r));
+    }
+
+    /* 任务统计卡：一行「大数」+ 一条完成进度 + 几块明细。
+       为什么把完成率做成主角：任务页最想知道的就是"该做的做完了没"，
+       条数只是过程量。明细里那几块各自回答一个具体问题
+       （还剩多少 / 每天多少 / 哪几天在动 / 哪类最重）。 */
+    _buildTaskStatsHtml(win, rangeLabel) {
+      const records = this._taskBoardRecords(win);
+      if (!this._taskTypes().length) {
+        return `<div class="north-caltab-board-card north-caltab-task">
+            <div class="north-caltab-board-cardhead">
+                <span class="north-caltab-board-cardtitle">任务统计</span>
+                <span class="north-caltab-board-cardsub">${escapeHtml(rangeLabel)}</span>
+            </div>
+            <div class="north-caltab-board-empty">还没有把任何类型当成任务。去「设置 → 任务设置」把常做的事标成任务，这一页就会开始统计完成情况。<br><button class="north-caltab-habit-empty-btn" type="button" data-caltab-act="settings" data-settings-group="task">去设置</button></div>
+        </div>`;
+      }
+      const total = records.length;
+      const done = records.filter((r) => r && r.done).length;
+      const left = total - done;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      /* 有记录的天数 / 平均每天多少条：分母用「这一段的天数」而不是"有记录的天数"，
+         否则"日均"会永远等于"有记录那天的平均"，看不出懈怠的日子。 */
+      const dayKeys = new Set();
+      records.forEach((r) => {
+        if (r && r.date) dayKeys.add(r.date);
+      });
+      const days = Math.max(1, Number(win.days) || this._boardWindow().days);
+      const perDay = total ? Math.round((total / days) * 10) / 10 : 0;
+      /* 类型分布：只列任务类型里真的出现过的，按条数排 ——
+         这一页问的是"哪些事占得多"，条数比时长更直观（任务常常不记时长）。 */
+      const byType = new Map();
+      records.forEach((r) => {
+        const name = String((r && r.type) || "").trim();
+        if (!name) return;
+        const cur = byType.get(name) || { cnt: 0, done: 0 };
+        cur.cnt += 1;
+        if (r.done) cur.done += 1;
+        byType.set(name, cur);
+      });
+      const typeRows = Array.from(byType.entries())
+        .map(([name, v]) => ({
+          name,
+          cnt: v.cnt,
+          done: v.done,
+          color: this._colorOf(name) || DEFAULT_TYPE_COLOR,
+        }))
+        .sort((a, b) => b.cnt - a.cnt);
+      const maxCnt = typeRows.reduce((m, t) => Math.max(m, t.cnt), 0) || 1;
+      const typeHtml = typeRows
+        .map(
+          (t) => `<div class="north-caltab-task-type" style="--tt-c:${escapeHtml(
+            t.color
+          )}">
+                <span class="north-caltab-task-typename"><i></i>${escapeHtml(
+                  t.name
+                )}</span>
+                <span class="north-caltab-task-typetrack"><i style="width:${Math.max(
+                  3,
+                  Math.round((t.cnt / maxCnt) * 100)
+                )}%"></i></span>
+                <span class="north-caltab-task-typenum">${t.done}/${t.cnt}</span>
+            </div>`
+        )
+        .join("");
+      const cell = (num, unit, label) =>
+        `<div class="north-caltab-task-cell"><b>${num}<i>${unit}</i></b><span>${label}</span></div>`;
+      return `<div class="north-caltab-board-card north-caltab-task">
+            <div class="north-caltab-board-cardhead">
+                <span class="north-caltab-board-cardtitle">任务统计</span>
+                <span class="north-caltab-board-cardsub">${escapeHtml(
+                  rangeLabel
+                )} · 共 ${total} 条</span>
+            </div>
+            <div class="north-caltab-task-hero">
+                <div class="north-caltab-task-rate">
+                    <b>${pct}<i>%</i></b>
+                    <span>完成率</span>
+                </div>
+                <div class="north-caltab-task-bar">
+                    <div class="north-caltab-task-track"><i style="width:${pct}%"></i></div>
+                    <div class="north-caltab-task-barnote">已完成 <b>${done}</b> · 待完成 <b>${left}</b></div>
+                </div>
+            </div>
+            <div class="north-caltab-task-cells">
+                ${cell(total, "条", "任务总数")}
+                ${cell(dayKeys.size, "天", "有任务的天")}
+                ${cell(perDay, "", "日均条数")}
+            </div>
+            ${
+              typeHtml
+                ? `<div class="north-caltab-task-types">${typeHtml}</div>`
+                : `<div class="north-caltab-board-empty">这一段还没有任务记录。</div>`
+            }
+        </div>`;
+    }
+
+    /* 任务节奏卡：按天（或按周 / 月）画「新增 vs 完成」两组柱。
+       为什么值得单开一张：上面那张只说"总体完成率"，
+       看不出"是不是堆在最后一天突击"。两组柱并排，堆没堆一眼就看出来。
+       粒度跟着工作台那段窗口走：一年 → 按月，一个月 → 按天，
+       一周 → 按天。桶太多会挤成一片，所以超过 40 个桶就自动降一档。 */
+    _buildTaskRhythmHtml(win, rangeLabel) {
+      const records = this._taskBoardRecords(win);
+      if (!this._taskTypes().length || !records.length) return "";
+      const days = Math.max(1, Number(win.days) || 1);
+      const scale = days > 120 ? "month" : days > 45 ? "week" : "day";
+      const buckets = new Map();
+      const keyOf = (dateKey) => this._metricBucketKey(dateKey, scale);
+      /* 先把这一段的桶全部建出来（含 0），否则稀疏的日子会被跳过、
+         柱子之间就"没有间隔"了，看着像连续几天都有记录。 */
+      const from = new Date(`${win.from}T00:00:00`);
+      for (let i = 0; i < days; i++) {
+        const d = new Date(from.getTime() + i * 86400000);
+        const k = keyOf(this._calKey(d));
+        if (k && !buckets.has(k)) buckets.set(k, { add: 0, done: 0 });
+      }
+      records.forEach((r) => {
+        const k = keyOf(r.date);
+        const b = k && buckets.get(k);
+        if (!b) return;
+        b.add += 1;
+        if (r.done) b.done += 1;
+      });
+      const list = Array.from(buckets.entries()).map(([key, v]) => ({
+        key,
+        ...v,
+      }));
+      const maxV = list.reduce((m, b) => Math.max(m, b.add, b.done), 0) || 1;
+      const label = (key) => {
+        if (scale === "month") {
+          const m = String(key).match(/^\d{4}-(\d{2})$/);
+          return m ? `${+m[1]}月` : "";
+        }
+        const m = String(key).match(/^\d{4}-\d{2}-(\d{2})$/);
+        return m ? `${+m[1]}` : "";
+      };
+      /* 标签隔几个写一个：一天一根时全写会糊成一条黑线 */
+      const step = list.length > 24 ? Math.ceil(list.length / 12) : 1;
+      const bars = list
+        .map((b, i) => {
+          const hAdd = Math.max(b.add ? 4 : 0, Math.round((b.add / maxV) * 100));
+          const hDone = Math.max(b.done ? 4 : 0, Math.round((b.done / maxV) * 100));
+          return `<div class="north-caltab-task-rcol" data-tip="${escapeHtml(
+            `${b.key} · 新增 ${b.add} · 完成 ${b.done}`
+          )}">
+                <div class="north-caltab-task-rbars"><i class="is-add" style="height:${hAdd}%"></i><i class="is-done" style="height:${hDone}%"></i></div>
+                <span class="north-caltab-task-rlabel">${
+                  i % step === 0 ? label(b.key) : ""
+                }</span>
+            </div>`;
+        })
+        .join("");
+      return `<div class="north-caltab-board-card north-caltab-task-rhythm">
+            <div class="north-caltab-board-cardhead">
+                <span class="north-caltab-board-cardtitle">任务节奏</span>
+                <span class="north-caltab-board-cardsub">${escapeHtml(
+                  rangeLabel
+                )} · <span class="north-caltab-task-leg is-add"><i></i>新增</span><span class="north-caltab-task-leg is-done"><i></i>完成</span></span>
+            </div>
+            <div class="north-caltab-task-rchart">${bars}</div>
+        </div>`;
+    }
+
     /* 习惯视图主体：顶部「今日完成 x / y」+ 进度条，然后一个习惯一张卡，
        最后一条**共用**的等级说明（几个习惯都是「合计时长」分级，说明一条就够）。
        视图自己带一组周期段位（日 / 周 / 月 / 年 / 范围）：年是原来的整年热力，
        其余周期把每张卡的格子区换成对应窗口的展示（月历格 / 周条 / 单日 / 流式格）。 */
     _buildCalendarHabitHtml(year) {
-      const types = this._habitTypes();
+      /* 「只看任务」开着时，只留本身就是任务类型的习惯：
+         这一屏追踪的是"我挑的那几个类型"，任务开关问的是"其中哪些是任务"，
+         两个条件是与关系（与日历 / 工作台那边同一口径）。
+         名单走 _habitShownTypes，关系图用的是同一份。 */
+      const allHabits = this._habitTypes();
+      const types = this._habitShownTypes();
+      const taskOnly =
+        !!this._calTabTaskOnly && this._taskTypes().length > 0;
+      /* 习惯一个都没配 vs. 配了但被任务筛选清空：两种空态说法不一样，
+         后者要是也说"去设置里挑几个类型"，用户会以为自己配置丢了。 */
+      const emptyByTask = taskOnly && allHabits.length > 0 && !types.length;
       const todayKey = this._calKey(new Date());
       const now = new Date();
       /* 周期与锚点：_paintCalendarTab 已保证初始化，这里只兜底 */
@@ -10319,6 +11426,16 @@
       };
 
       if (!types.length) {
+        if (emptyByTask) {
+          return `<div class="north-caltab-habit">
+                ${toolbarHtml}
+                <div class="north-caltab-habit-empty">
+                    <div class="north-caltab-habit-empty-title">这些习惯都不是任务</div>
+                    <div class="north-caltab-habit-empty-desc">当前开着「任务」，而挑中的习惯里没有一个是任务类型。再点一次「任务」可看全部习惯，或去「设置 → 任务设置」把某个习惯类型标成任务。</div>
+                    <button class="north-caltab-habit-empty-btn" type="button" data-caltab-act="taskonly">看全部习惯</button>
+                </div>
+            </div>`;
+        }
         return `<div class="north-caltab-habit">
                 ${toolbarHtml}
                 <div class="north-caltab-habit-empty">
@@ -11921,6 +13038,30 @@
          面板的开关状态存在实例上，重绘后要恢复 —— 否则连着勾第二个就勾不上了。 */
       const typeFilterOn = this._calTabTypeFilter.size > 0;
       const typeMenuOpen = !!this._calTabTypeMenuOpen;
+      /* 「只看任务」开关：只要真配了任务类型、且数据源是记录就出现。
+         它是一层纯粹的**记录筛选**，而习惯 / 指标 / 工作台读的也都是记录，
+         所以每个段位都该管用（早先只在日历类段位显示，切到习惯视图按钮就
+         "消失"了 —— 那不是隐藏，是那一屏没接上这个开关）：
+           · 习惯视图 —— 只留"本身就是任务类型"的那几张习惯卡；
+           · 指标视图 —— 只从任务记录里取数值；
+           · 工作台 —— 记录类区块走筛过的记录，习惯块只留任务类型的习惯。
+         数据源是「文档」时不出现：文档既没有 done 属性，也没有可对的类型。 */
+      const taskTypesOn =
+        this._taskTypes().length > 0 && this._calSource() !== "docs";
+      const taskOnlyOn = taskTypesOn && !!this._calTabTaskOnly;
+      /* 「只看任务」开着但这一屏一条任务都没有：给一句指路的空态。
+         否则整张月历是空的，看起来像数据丢了 / 插件坏了。
+         习惯视图另有自己的一句（见 _buildCalendarHabitHtml 的空态分支），
+         因为它的空是"没有任务类型的习惯"，而不是"没有任务记录"。 */
+      const gridView = !isBoard && !isHabit && !isMetric;
+      const taskEmptyHtml =
+        gridView &&
+        taskOnlyOn &&
+        !Object.keys(byDate).some((k) => (byDate[k] || []).length)
+          ? `<div class="north-caltab-taskempty">还没有任务记录。当前任务类型：${escapeHtml(
+              this._taskTypes().join(" / ")
+            )}　·　再点一次「任务」可看全部记录</div>`
+          : "";
       const typeMenuHtml = [
         `<div class="north-caltab-typeopt${typeFilterOn ? "" : " on"}" data-cal-type="">` +
           `<span class="north-caltab-typedot north-caltab-typedot-all"></span><span>全部类型</span></div>`,
@@ -12021,6 +13162,15 @@
                       .join("")}
                 </div>
                 <div class="north-caltab-types">
+                    ${
+                      taskTypesOn
+                        ? `<button class="north-caltab-typebtn north-caltab-taskbtn${
+                            taskOnlyOn ? " active" : ""
+                          }" data-caltab-act="taskonly" data-tip="${
+                            taskOnlyOn ? "只看任务（点一下看全部）" : "只看任务"
+                          }"><span>任务</span></button>`
+                        : ""
+                    }
                     <button class="north-caltab-typebtn${
                       typeFilterOn || typeMenuOpen ? " active" : ""
                     }" data-caltab-act="types" data-tip="按类型筛选">${escapeHtml(
@@ -12047,6 +13197,7 @@
                 </div>
             </div>
             ${tableToolsHtml}
+            ${taskEmptyHtml}
             ${body}
             <div class="north-caltab-modal" id="northCaltabModal" style="display:none">
                 <div class="north-caltab-modal-bg"></div>
@@ -12217,16 +13368,41 @@
         const items = shown
           .map((r, idx) => {
             const c = this._calRecordColor(r);
+            const isTask = this._isTaskRecord(r);
+            const done = !!(r && r.done);
             /* 格子里只放内容，完整的一行「时间 类型：内容 (图标)」挂到 data-tip，
                悬停时用自绘气泡显示。 */
             const full = `${r.time || ""} ${r.type || ""}：${this._brToSpace(r.content)}${
               this._iconHint(r) ? ` (${this._iconHint(r)})` : ""
             }`.trim();
-            const chip = `<div class="north-caltab-item"${
+            /* 任务卡：左侧圆角方框 + 标题，底色跟类型色融合（滴答清单那种观感）。
+               刻意**不放**跳转箭头：格里一行只有 12px 高，右侧再挂个图标
+               会把标题挤短一截，而且那枚灰箭头看着像个外链按钮，
+               不像「日程块」的一部分。点整条照样跳转，功能一点没少。
+               方框是**可点的**（data-caltab-taskdone 带块 id）：
+               点它只切完成状态、不跳文档 —— 见 _bindCalendarTab 里那条分支。 */
+            const chip = `<div class="north-caltab-item${
+              isTask ? " is-task" : ""
+            }${done ? " is-done" : ""}"${
               c ? ` style="--tt-c:${c}"` : ""
             } data-cal-id="${escapeHtml(
               r.id || ""
-            )}" data-tip="${escapeHtml(full)}">${escapeHtml(r.content || "")}</div>`;
+            )}" data-tip="${escapeHtml(full)}">${
+              isTask
+                ? `<button class="north-caltab-taskbox" type="button" data-caltab-taskdone="${escapeHtml(
+                    r.id || ""
+                  )}" data-done="${done ? "1" : ""}" aria-pressed="${
+                    done ? "true" : "false"
+                  }" data-tip="${done ? "标记为未完成" : "标记为完成"}">${this._taskCheckSvg(
+                    "north-caltab-taskicon",
+                    16,
+                    true,
+                    done
+                  )}</button>`
+                : ""
+            }<span class="north-caltab-itemtext">${escapeHtml(
+              r.content || ""
+            )}</span>${done ? this._taskDoneBadge() : ""}</div>`;
             if (idx === shown.length - 1 && rest > 0) {
               return `<div class="north-caltab-lastrow">${chip}<span class="north-caltab-more" data-tip="查看当天全部 ${dayRecords.length} ${this._calUnit()}">+${rest}</span></div>`;
             }
@@ -12416,6 +13592,8 @@
             .querySelectorAll(".north-caltab-typemenu.open")
             .forEach((m) => m.classList.remove("open"));
           document.querySelectorAll(".north-caltab-typebtn").forEach((b) => {
+            /* 「任务」是独立开关，高亮由它自己的状态决定，不跟着类型筛选走 */
+            if (b.classList.contains("north-caltab-taskbtn")) return;
             b.classList.toggle("active", this._calTabTypeFilter.size > 0);
           });
         };
@@ -12423,13 +13601,48 @@
       }
 
       container.addEventListener("click", (e) => {
+        /* —— 任务复选框：必须排在所有「点条目跳文档」之前。
+           点方框只切完成状态，不跳走 —— 否则每勾一次就弹出一个标签页。 —— */
+        const taskBox =
+          e.target.closest && e.target.closest("[data-caltab-taskdone]");
+        if (taskBox) {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = taskBox.dataset.caltabTaskdone || "";
+          if (id) {
+            this._toggleTaskDone(
+              container,
+              id,
+              taskBox.dataset.done !== "1"
+            );
+          }
+          return;
+        }
+        /* —— 「只看任务」开关：必须排在下面那条 `.north-caltab-typebtn` 之前。
+           它复用了类型按钮的样式类（两枚 pill 要长得一样），而那条分支会把它
+           当成「展开类型面板」，结果是点了没反应、还莫名弹出个下拉。 —— */
+        if (
+          e.target.closest &&
+          e.target.closest('[data-caltab-act="taskonly"]')
+        ) {
+          this._calTabTaskOnly = !this._calTabTaskOnly;
+          this._paintCalendarTab(container);
+          return;
+        }
         /* —— 类型筛选：放在最前面拦掉。面板里的项自带 data-cal-type（「全部类型」
            那一项是空串），别让它们落到后面按 data-caltab-act 处理的分支里去 —— */
-        if (e.target.closest && e.target.closest(".north-caltab-typebtn")) {
+        if (
+          e.target.closest &&
+          e.target.closest(".north-caltab-typebtn:not(.north-caltab-taskbtn)")
+        ) {
           e.stopPropagation();
           this._calTabTypeMenuOpen = !this._calTabTypeMenuOpen;
           const menu = container.querySelector(".north-caltab-typemenu");
-          const btn = container.querySelector(".north-caltab-typebtn");
+          /* 一定要挑「类型」那枚：选择器写宽了会选中旁边的「任务」按钮，
+             它没有下拉可开，高亮也会串到错误的那一枚上。 */
+          const btn = container.querySelector(
+            ".north-caltab-typebtn:not(.north-caltab-taskbtn)"
+          );
           if (menu) menu.classList.toggle("open", this._calTabTypeMenuOpen);
           if (btn) {
             btn.classList.toggle(
@@ -12663,6 +13876,8 @@
         ) {
           const modal = container.querySelector("#northCaltabModal");
           if (modal) modal.style.display = "none";
+          /* 关掉就把「哪天开着」也清掉，免得之后勾任务时又把它弹回来 */
+          this._calTabDayModalKey = "";
           return;
         }
         /* 段位切换：月 / 周 / 三 / 日 —— 四个都接上视图了，切过去就重绘。
@@ -12910,6 +14125,13 @@
         const btn = e.target.closest && e.target.closest("[data-caltab-act]");
         if (btn) {
           const act = btn.dataset.caltabAct;
+          /* 「只看任务」：一个开关，不碰类型筛选（两者是与关系，能叠着用）。
+             只活在内存里，所以这里只改状态 + 重绘，不写盘。 */
+          if (act === "taskonly") {
+            this._calTabTaskOnly = !this._calTabTaskOnly;
+            this._paintCalendarTab(container);
+            return;
+          }
           if (act === "today") {
             /* 工作台（合并后的总览段位）的「今天」：周期锚点回到今天 ——
                「过去一年」那张热力图、分布、走势、指标都锚在它上面，一起回来。
@@ -12971,6 +14193,25 @@
           /* 工作台上的「打开今天的日记」：与「打开今日日记」同一个入口 */
           if (act === "todaydiary") {
             this._openDailyNote();
+            return;
+          }
+          /* 回顾：换一批（把换批序号 +1 再重绘）/ 打开某条旧记录 */
+          if (act === "reviewnext") {
+            /* 序号与它所属的周期一起更新（见 _reviewPicks 里按周期归零的说明）。
+               周期 key 只在一处算（_reviewPeriod），不另算一份，
+               免得跨零点 / 跨周时两边不一致。 */
+            const periodKey = this._reviewPeriod().key;
+            this._reviewRound =
+              (this._reviewRoundDay === periodKey
+                ? Number(this._reviewRound) || 0
+                : 0) + 1;
+            this._reviewRoundDay = periodKey;
+            this._paintCalendarTab(container);
+            return;
+          }
+          if (act === "reviewopen") {
+            const id = btn.dataset.calId || "";
+            if (id) this._gotoCalItem(id);
             return;
           }
           /* 工作台热力图上的某一格：把「类型时间轴」钉在那一天（点「今天」清掉）。
@@ -13175,10 +14416,14 @@
            但先判它语义更清楚（点条目是跳转，点 +N 是展开当天列表）。 */
         const item = e.target.closest && e.target.closest("[data-cal-id]");
         if (item && item.dataset.calId) {
+          /* 点在任务复选框上不该跳文档 —— 上面那条分支已经拦住了，
+             这里再兜一次，防的是方框被包进别的带 data-cal-id 的元素里。 */
+          if (e.target.closest("[data-caltab-taskdone]")) return;
           /* 从弹窗里点出去的顺手把弹窗关掉，免得切回来还挡着 */
           if (item.closest(".north-caltab-modal")) {
             const modal = container.querySelector("#northCaltabModal");
             if (modal) modal.style.display = "none";
+            this._calTabDayModalKey = "";
           }
           this._gotoCalItem(item.dataset.calId);
           return;
@@ -13285,6 +14530,13 @@
             [this._attr("date")]: dateVal,
             [this._attr("created")]: existing[this._attr("created")] || now,
             [this._attr("updated")]: now,
+            /* 完成状态原样保留（同 _tagBlock 里那段说明）：
+               编辑时间 / 类型 / 内容不该顺手把任务打回未完成。 */
+            [this._attr(TASK_DONE_KEY)]: String(
+              existing[this._attr(TASK_DONE_KEY)] == null
+                ? ""
+                : existing[this._attr(TASK_DONE_KEY)]
+            ),
           },
         });
         /* 修改弹窗只改了这一条，但它前后邻居的间隔都可能跟着变 */
@@ -13301,6 +14553,85 @@
       } finally {
         if (saveBtn) saveBtn.disabled = false;
       }
+    }
+
+    /* ===================== 任务完成状态 ===================== */
+
+    /* 点复选框：切换这条任务的完成状态，并**写进块属性**（custom-<前缀>-taskdone）。
+       为什么不用内存里的一份 Set：那样一重启就丢，而且同一块在日历 / Dock /
+       表格三个视图之间会对不上。写成块属性之后：
+         · 重启、换设备（同步）都还在；
+         · 主题 / 代码片段能直接按属性选样式；
+         · 记录被移动 / 复制，状态跟着块走。
+
+       写属性只带这一个键 —— setBlockAttrs 是整体替换，只传一个键会**清掉**
+       time / type / content 这些同族属性，记录会当场从日历里消失。
+       所以先 getBlockAttrs 拿全量，再把目标键改掉、整份写回去。
+       清空时写空串而不是 delete：setBlockAttrs 对空值就是删属性，
+       语义一致，也省得再引一个 removeBlockAttrs 接口。 */
+    async _toggleTaskDone(container, blockId, done) {
+      const raw = String(blockId || "").replace(/^lifelog_dock_/, "");
+      if (!this._validId(raw)) {
+        showMessage(`${NAME}：这条任务找不到对应的块`);
+        return;
+      }
+      const key = this._attr(TASK_DONE_KEY);
+      let existing = {};
+      try {
+        const resp = await this._request("/api/attr/getBlockAttrs", { id: raw });
+        existing = resp && resp.data && typeof resp.data === "object" ? resp.data : {};
+      } catch (e) {
+        showMessage(`${NAME}：读取块属性失败，稍后再试`);
+        return;
+      }
+      /* 整份回写：除了完成状态，其余属性原样带上（见上面那段注释） */
+      const attrs = Object.assign({}, existing, { [key]: done ? "1" : "" });
+      /* 写之前先把「上次更新」改掉，与打标 / 编辑保持同一套时间戳口径 */
+      attrs[this._attr("updated")] = formatDateTime();
+      try {
+        await this._request("/api/attr/setBlockAttrs", { id: raw, attrs });
+      } catch (e) {
+        showMessage(`${NAME}：保存完成状态失败：${e.message}`);
+        return;
+      }
+      /* 缓存里那条就地改掉：等下一次查库之前，重绘出来的已经是新状态 ——
+         不然会出现「点了变勾、界面一刷新又跳回未完成」。 */
+      [this._lifelogDockCache, this._calDocsCache].forEach((list) => {
+        if (!Array.isArray(list)) return;
+        list.forEach((r) => {
+          if (!r) return;
+          const rid = String(r.id || "").replace(/^lifelog_dock_/, "");
+          if (rid === raw) r.done = !!done;
+        });
+      });
+      /* 重绘会把整个容器换掉，当天列表弹窗（如果正开着）会跟着消失。
+         这里先记下当前开着的是哪一天，重绘后再把它重新打开 ——
+         否则在弹窗里勾一条任务，弹窗当场被关掉，得再点一次 +N 才能接着勾。 */
+      const openDay = this._calTabDayModalKey;
+      this._paintCalendarTab(container);
+      if (openDay) this._openCalendarDayModal(container, openDay);
+      if (this._lifeLogDockEl) this._refreshLifeLogDockContent();
+      /* 文档正文里那枚「已完成」胶囊是**纯 CSS**（靠块属性选择器），
+         所以 DOM 上的属性得跟着更新，否则要等思源自己重渲染那一块才看得到。
+         两种做法：整篇重建样式表（重，且会打断正在编辑的光标），
+         或者只把这一个块的属性同步到 DOM 上（轻、精准）—— 取后者。 */
+      this._syncTaskDoneAttrToDom(raw, done);
+    }
+
+    /* 把完成状态写进文档 DOM 上的那个段落块，让纯 CSS 的「已完成」胶囊立刻出现 / 消失。
+       思源的块元素自带 data-node-id，属性名与块属性同名（custom-xxx-taskdone），
+       所以直接 setAttribute / removeAttribute 即可 —— 不碰正文，不触发保存，
+       内核下一次重渲染时也会从库里的属性重新写一遍，两边一致。 */
+    _syncTaskDoneAttrToDom(blockId, done) {
+      if (typeof document === "undefined") return;
+      const key = this._attr(TASK_DONE_KEY);
+      const nodes = document.querySelectorAll(
+        `.protyle-wysiwyg [data-node-id="${cssAttrValue(blockId)}"]`
+      );
+      nodes.forEach((n) => {
+        if (done) n.setAttribute(key, "1");
+        else n.removeAttribute(key);
+      });
     }
 
     /* 打开某条数据对应的块（并高亮它）。
@@ -13346,15 +14677,35 @@
           ? records
               .map((r) => {
                 const c = this._calRecordColor(r);
-                return `<div class="north-caltab-modal-item"${
+                const isTask = this._isTaskRecord(r);
+                const done = !!(r && r.done);
+                return `<div class="north-caltab-modal-item${
+                  isTask ? " is-task" : ""
+                }${done ? " is-done" : ""}"${
                   c ? ` style="--tt-c:${c}"` : ""
-                } data-cal-id="${escapeHtml(r.id || "")}">${escapeHtml(
+                } data-cal-id="${escapeHtml(r.id || "")}">${
+                  isTask
+                    ? `<button class="north-caltab-taskbox" type="button" data-caltab-taskdone="${escapeHtml(
+                        r.id || ""
+                      )}" data-done="${done ? "1" : ""}" aria-pressed="${
+                        done ? "true" : "false"
+                      }" data-tip="${done ? "标记为未完成" : "标记为完成"}">${this._taskCheckSvg(
+                        "north-caltab-taskicon",
+                        14,
+                        true,
+                        done
+                      )}</button>`
+                    : ""
+                }<span class="north-caltab-itemtext">${escapeHtml(
                   this._brToSpace(r.content)
-                )}</div>`;
+                )}</span>${done ? this._taskDoneBadge() : ""}</div>`;
               })
               .join("")
           : `<div class="north-caltab-modal-empty">这一天还没有${unit.slice(1)}</div>`;
       }
+      /* 记住当前开着的是哪一天：勾选任务会触发整页重绘，
+         重绘后靠它把弹窗原样恢复（见 _toggleTaskDone）。 */
+      this._calTabDayModalKey = dateKey;
       modal.style.display = "";
     }
 
@@ -14531,6 +15882,11 @@
       if (this._isFresh(existing, info, date)) return "unchanged";
       const now = formatDateTime();
       try {
+        /* 完成状态是「用户点出来的」，不属于「从正文推导出来的」信息，
+           所以这里必须原样带上 —— setBlockAttrs 是整体替换，
+           少写这一个键就等于每次重新打标都把任务打回未完成。 */
+        const doneKey = this._attr(TASK_DONE_KEY);
+        const doneVal = String(existing[doneKey] == null ? "" : existing[doneKey]);
         await this._request("/api/attr/setBlockAttrs", {
           id: blockId,
           attrs: {
@@ -14540,6 +15896,7 @@
             [this._attr("date")]: date,
             [this._attr("created")]: existing[this._attr("created")] || now,
             [this._attr("updated")]: now,
+            [doneKey]: doneVal,
           },
         });
         return "tagged";
@@ -14687,15 +16044,30 @@
       /* 现有属性一次查齐（join blocks 用 root_id 圈定本文档）。
          同样要分页：只看到前 64 条的话，后面的块会被当成「本来就没有属性」，
          于是每轮同步都重写一遍（写放大），旧值也清不掉。 */
+      /* 现有属性一次查齐（join blocks 用 root_id 圈定本文档）。
+         同样要分页：只看到前 64 条的话，后面的块会被当成「本来就没有属性」，
+         于是每轮同步都重写一遍（写放大），旧值也清不掉。
+         这里连「完成状态」一起查：setBlockAttrs 是整体替换（见 _tagBlock 的说明），
+         只写间隔键会把任务打回未完成 —— 所以回写时必须把 done 原样带上。 */
+      const aDone = this._attr(TASK_DONE_KEY);
       const have = new Map();
+      const haveDone = new Map();
       try {
         const attrs = await this._sqlAll(
           `SELECT a.block_id AS bid, a.value AS value ` +
             `FROM attributes a INNER JOIN blocks b ON b.id = a.block_id ` +
             `WHERE b.root_id = '${rootId}' AND a.name = '${aInterval}' ORDER BY a.block_id`
         );
+        const dones = await this._sqlAll(
+          `SELECT a.block_id AS bid, a.value AS value ` +
+            `FROM attributes a INNER JOIN blocks b ON b.id = a.block_id ` +
+            `WHERE b.root_id = '${rootId}' AND a.name = '${aDone}' ORDER BY a.block_id`
+        );
         for (const row of attrs) {
           have.set(row.bid, String(row.value == null ? "" : row.value));
+        }
+        for (const row of dones) {
+          haveDone.set(row.bid, String(row.value == null ? "" : row.value));
         }
       } catch (e) {
         /* 查不到就当全空，走全量写 */
@@ -14705,9 +16077,12 @@
         /* 空串只用来「清掉旧值」；本来就空的不写，省一次请求 */
         if (text === "" ? !cur : cur === text) continue;
         try {
+          const attrs = { [aInterval]: text };
+          /* 已完成的任务：把状态一起写回去，别让间隔同步把它抹掉 */
+          if (haveDone.get(blockId)) attrs[aDone] = haveDone.get(blockId);
           await this._request("/api/attr/setBlockAttrs", {
             id: blockId,
-            attrs: { [aInterval]: text },
+            attrs,
           });
         } catch (e) {
           console.warn(`${NAME}：写间隔属性失败`, e);
@@ -14881,10 +16256,17 @@
           `.protyle-wysiwyg [data-type="NodeParagraph"].tt-hit,`,
           `.protyle-wysiwyg [data-type="NodeParagraph"][${attr}]:not(.tt-nomark) {`,
           `  --tt-line-w: ${noLine ? 0 : lineW}px;`,
+          /* 线色混的是**主题背景**而不是 transparent。
+             混 transparent 得到的是「半透明色」，最终颜色取决于它下面压着
+             什么：底色档位一改、鼠标悬停把底色加深、选中加深，线都会跟着
+             亮一档 —— 用户看到的就是「鼠标一划过下划线就发光」。
+             混背景色得到的是**实色**，与底下铺什么无关：底色怎么变、悬停
+             怎么加深，线始终是同一个像素值。观感与原来几乎一致
+             （60% 类型色叠在主题背景上，本来就是这个结果）。 */
           `  --tt-line: ${
             noLine
               ? "transparent"
-              : `color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${MARK_LINE_MIX}%, transparent)`
+              : `color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${MARK_LINE_MIX}%, var(--b3-theme-background))`
           };`,
           `  --tt-bg: ${
             bg > 0
@@ -14910,6 +16292,163 @@
           );
         }
       }
+      /* ★ 收编内核的「悬停 / 选中」高亮覆盖层 ★
+         ------------------------------------------------------------------
+         现象：鼠标移到记录行上时，只有下划线的颜色会亮一档，块底色和文字
+         都不变 —— 看着像下划线自己在「发光」。
+
+         原因不在我们的线色上，在内核那层覆盖物：
+           内核给块挂 .protyle-wysiwyg--hl / --select / --select-mode 时，
+           会给**块的 ::after** 生成一层
+             position:absolute; width:100%; height:100%; z-index:3;
+             background-color: 主题主色浅档（半透明）
+           盖在整块之上。我们的下划线是 box-shadow inset 画的，正好压在这
+           层之下，于是被那层半透明色「洗」了一遍：线的等效不透明度从 60%
+           被抬到视觉上更亮的一档；而块自身的 background-color 在这层下面，
+           只有 3% 的淡底，被盖住后几乎看不出变化 —— 这就是「只有线变亮」
+           的全部来由。
+
+         修法：把这层覆盖物按回行内流、抽掉底色与描边，等于让它不存在；
+         悬停 / 选中的反馈改由下面几条规则用**同一支类型色**给底色加深：
+           · 下划线颜色恒定，不会再随鼠标忽明忽暗；
+           · 底色加深与原有的淡底同源，观感连续，仍是「与背景融合」。
+
+         两处必须让路：
+           ① 不能写 content —— 「记录间隔」角标同样挂在块 ::after 上
+              （见 _ensureIntervalStyle ②），改 content 会把角标顶掉。
+              所以只收编盒模型与配色，content 保持内核 / 角标自己写的值。
+           ② 不能碰拖拽 —— 内核的插入落点线也画在块 ::after 上
+              （dragover__top--sibling 等），收编了就看不清拖到哪了，
+              选择器里统一排除带 dragover 的块。 */
+      const markRows = [
+        `.protyle-wysiwyg [data-type="NodeParagraph"].tt-hit`,
+        `.protyle-wysiwyg [data-type="NodeParagraph"][${attr}]:not(.tt-nomark)`,
+      ];
+      /* 注意：这里返回**数组**，由调用处统一 join。
+         早先写成「每个状态返回一个已经 join 过多行的字符串」，再在末尾拼
+         ::after —— 结果只有最后一个选择器带上了 ::after，前面几条变成了
+         直接选中块本体，会把块的下划线一起清掉。选择器必须一条一条拼。 */
+      const stateSel = (state) =>
+        markRows.map((s) => `${s}:not([class*="dragover"])${state}`);
+      const stateAll = [
+        ...stateSel(".protyle-wysiwyg--hl"),
+        ...stateSel(".protyle-wysiwyg--select"),
+        ...stateSel(".protyle-wysiwyg--select-mode"),
+      ];
+      rules.push(
+        [
+          `${stateAll.map((s) => `${s}::after`).join(",\n")} {`,
+          `  position: static !important;`,
+          `  width: auto !important;`,
+          `  height: auto !important;`,
+          `  z-index: auto !important;`,
+          `  background-color: transparent !important;`,
+          `  box-shadow: none !important;`,
+          `  outline: none !important;`,
+          `}`,
+        ].join("\n")
+      );
+      /* 没有间隔角标的记录行，::after 上没有任何要显示的内容（内核只塞了
+         一个空格），直接关掉最干净：既不会因为那枚空格多出半个行高，
+         也不受主题给 ::after 加的描边影响。带角标的行必须留着。 */
+      const intervalAttr = this._attr(LIFELOG_INTERVAL_KEY);
+      rules.push(
+        [
+          `${stateAll
+            .map((s) => `${s}:not([${intervalAttr}])::after`)
+            .join(",\n")} {`,
+          `  display: none !important;`,
+          `}`,
+        ].join("\n")
+      );
+      /* 悬停 / 选中的底色：只比原底色高一档（+4 / +9 个百分点），
+         观感是「这一行轻轻浮起来」，而不是扣一张色卡上去。
+         底色设成「关闭」时也各留 5% / 10%，否则鼠标划过去毫无动静。 */
+      const hoverBg = Math.max(bg + 4, 5);
+      const selectBg = Math.max(bg + 9, 10);
+      rules.push(
+        [
+          `${stateSel(".protyle-wysiwyg--hl").join(",\n")} {`,
+          `  background-color: color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${hoverBg}%, transparent);`,
+          `}`,
+        ].join("\n")
+      );
+      rules.push(
+        [
+          `${stateSel(".protyle-wysiwyg--select").join(",\n")},`,
+          `${stateSel(".protyle-wysiwyg--select-mode").join(",\n")} {`,
+          `  background-color: color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) ${selectBg}%, transparent);`,
+          `}`,
+        ].join("\n")
+      );
+      /* 文档正文里的「已完成」：任务在日历里勾掉后，正文那行末尾也挂一枚小胶囊，
+         与日历 / 时间轴 / 弹窗 / 表格是同一套反馈，四个地方看到的是同一个状态。
+
+         为什么挂在**正文层**（div[contenteditable]）的 ::after 上，而不是块上：
+           块的 ::after 已经被「记录间隔」角标占用了（见 _ensureIntervalStyle），
+           两者都写在块上会互相顶掉，完成的任务就看不到间隔、或者反过来。
+           正文层是另一个元素，天然不冲突。
+
+         为什么用字面量 content 而不是 attr()：
+           attr() 读的是**伪元素宿主自己**的属性，正文层上没有完成属性，
+           写在正文层就读不到值；这里要显示的是固定文案，字面量正合适。
+
+         为什么不会污染正文解析：
+           伪元素内容不进 textContent，_handleParagraph 解析「时间 类型：内容」时
+           看不到这枚胶囊，不会把「已完成」当成正文内容。
+
+         颜色只取 --tt-c（块上按类型写过，会继承下来），
+         所以类型色一改，胶囊跟着变，深浅主题都不用另写分支。 */
+      /* 选择器按「任务类型」逐个拼：只有当这条记录的类型仍在任务名单里，
+         才该显示「已完成」—— 否则把一个类型取消任务后，正文里它的历史记录
+         还挂着胶囊，与日历里已经变回普通记录的状态对不上。
+         一个任务类型都没配时整段不生成。 */
+      const doneAttr = this._attr(TASK_DONE_KEY);
+      const doneSel = this._taskTypes()
+        .map(
+          (t) =>
+            `.protyle-wysiwyg [data-type="NodeParagraph"][${attr}="${cssAttrValue(
+              t
+            )}"][${doneAttr}="1"]:not(.tt-nomark)`
+        )
+        /* 每个选择器都要落到「正文层」上：胶囊挂在正文层的 ::after，
+           display:inline 也得改正文层，否则 ::after 仍会另起一行。 */
+        .map((sel) => `${sel} > div[contenteditable="true"]`);
+      if (!doneSel.length) {
+        el.textContent = rules.join("\n");
+        return;
+      }
+      /* 正文层默认是块级盒，::after 会另起一行；改成行内盒它才跟在**最后一个字**
+         后面（与间隔角标同一个理由，见 _ensureIntervalStyle ①）。
+         这条只作用于「已完成的任务行」，不影响别的段落；
+         间隔角标关掉时也照样成立 —— 两套样式互不依赖。 */
+      rules.push(
+        [
+          `${doneSel.join(",\n")} {`,
+          `  display: inline;`,
+          `}`,
+        ].join("\n")
+      );
+      rules.push(
+        [
+          `${doneSel.map((sel) => `${sel}::after`).join(",\n")} {`,
+          `  content: "已完成";`,
+          `  display: inline-block;`,
+          `  margin-left: 6px;`,
+          `  padding: 0 5px;`,
+          `  border-radius: 4px;`,
+          `  background: color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) 14%, transparent);`,
+          `  color: color-mix(in srgb, var(--tt-c, ${DEFAULT_TYPE_COLOR}) 62%, var(--b3-theme-on-background));`,
+          `  font-size: 11px;`,
+          `  line-height: 16px;`,
+          `  vertical-align: 1px;`,
+          `  white-space: nowrap;`,
+          `  user-select: none;`,
+          `  -webkit-user-select: none;`,
+          `  pointer-events: none;`,
+          `}`,
+        ].join("\n")
+      );
       el.textContent = rules.join("\n");
     }
 
@@ -14936,6 +16475,9 @@
         document.head.appendChild(el);
       }
       const attr = this._attr(LIFELOG_INTERVAL_KEY);
+      const typeAttr = this._attr("type");
+      /* 「不是记录行」= 没有类型属性、也不是刚输入时的 .tt-hit。 */
+      const notRecord = `:not([${typeAttr}]):not(.tt-hit)`;
       el.textContent = [
         /* ① 正文容器改成「行内盒」—— 角标才会跟在**最后一个字**后面。
            ------------------------------------------------------------------
@@ -14991,10 +16533,14 @@
         `  background-color: transparent !important;`,
         `}`,
         /* ④ 角标占走 ::after 槽后，非记录行的块悬停就没有内核高亮底色了，补回来。
-           记录行（.tt-hit）另有插件自己的记录底色，跳过不动，免得两套底色打架。 */
-        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--hl:not(.tt-hit),`,
-        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--select:not(.tt-hit),`,
-        `.protyle-wysiwyg div[${attr}].protyle-wysiwyg--select-mode:not(.tt-hit) {`,
+           记录行要跳过，且**不能只认 .tt-hit**：那个类只在「刚输入、属性还没入库」
+           的那一小段时间挂着，刷新后记录行靠的是类型属性，身上并没有 .tt-hit。
+           漏掉属性这一条，记录行悬停就会被这里的主色底盖住 —— 明明 _ensureMarkStyle
+           已经按类型色算好了更淡的一档，却看不到，反馈也跟类型色对不上。
+           所以按「有没有记录类型属性」来排除，两条路都盖住。 */
+        `.protyle-wysiwyg div[${attr}]${notRecord}.protyle-wysiwyg--hl,`,
+        `.protyle-wysiwyg div[${attr}]${notRecord}.protyle-wysiwyg--select,`,
+        `.protyle-wysiwyg div[${attr}]${notRecord}.protyle-wysiwyg--select-mode {`,
         `  background-color: var(--b3-theme-primary-lightest) !important;`,
         `  border-radius: var(--b3-border-radius);`,
         `}`,
@@ -15292,3 +16838,4 @@
 
   };
 })();
+

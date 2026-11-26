@@ -2,7 +2,7 @@
     "name": "QingTrail",
     "author": "LunaNorth",
     "url": "https://github.com/LunaNorth/QingTrail",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "minAppVersion": "3.3.3",
     "disabledInPublish": true,
     "backends": ["all"],

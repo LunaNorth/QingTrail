@@ -1,4 +1,4 @@
-﻿.tt-settings {
+.tt-settings {
   display: flex;
   flex-direction: column;
 }
@@ -396,6 +396,12 @@
 .tt-habitpick__chip.on .tt-habitpick__count {
   color: inherit;
   opacity: 0.75;
+}
+/* 任务设置里，已选中的类型用一枚小对勾替换条数 ——
+   这一栏问的是「是不是任务」，不是「有多少条」，条数在这儿反而干扰判断。 */
+.tt-taskpick__tick {
+  flex: 0 0 auto;
+  opacity: 0.9;
 }
 .tt-habitpick__empty {
   padding: 2px 0 6px;
@@ -2914,6 +2920,9 @@
 .north-caltab-types {
   position: relative;
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .north-caltab-typebtn {
   height: 26px;
@@ -2940,11 +2949,56 @@
 .north-caltab-typebtn.active {
   color: var(--b3-theme-primary);
 }
+
+/* 「任务」开关：与类型筛选并排的一枚 pill。
+   平时是灰底 + 淡字（跟「全部类型」同款），打开后主色字 + 主色淡底 ——
+   它是个**开关**，不是下拉，所以不给箭头、也不展开面板。
+   **不带图标**：与旁边那枚「全部类型」保持同一套版式，两枚 pill 只靠文字
+   区分；加一枚对勾会让「任务」看着比旁边的筛选按钮高一个层级。 */
+.north-caltab-taskbtn {
+  gap: 4px;
+}
+.north-caltab-taskbtn.active {
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 12%,
+    var(--b3-theme-background)
+  );
+}
+/* 这些 svg 的填充 / 描边全部写在自己的 path / rect 上（复选框要「淡填充 + 实勾」，
+   不能整枚套一个 fill:none）。这里只兜住一件事：主题里对 svg 的全局
+   `fill: currentColor` 不能把勾的笔画也填实 —— path 自己声明了 fill="none"，
+   但外部 `svg path { fill: ... }` 这类规则的权重可能更高，所以再压一次。 */
+.north-caltab-taskicon path,
+.tt-taskpick__tick path {
+  fill: none;
+  stroke: currentColor;
+}
+
+/* 「只看任务」开着、却一条任务都没有时的空态提示条：
+   贴着工具栏下面一条浅底说明，把「为什么整屏是空的」讲清楚，
+   顺带把当前的任务类型列出来 —— 最常见的错因就是类型没配对。 */
+.north-caltab-taskempty {
+  flex-shrink: 0;
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 7%,
+    transparent
+  );
+  color: var(--b3-theme-on-surface-light);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .north-caltab-typemenu {
   display: none;
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
+  /* 靠右对齐：这组里现在可能并排两枚 pill（任务 / 类型），
+     从左边展开会挂在「任务」那枚下面，看着像点错了按钮。 */
+  right: 0;
   z-index: 30;
   min-width: 150px;
   max-height: 300px;
@@ -3332,6 +3386,10 @@
   border-right: 1px solid var(--tt-cal-line);
   border-bottom: 1px solid var(--tt-cal-line);
   overflow: hidden;
+  /* 让格子成为容器查询的锚点：「已完成」徽标要不要显示，
+     取决于这一格实际有多宽（见 .north-caltab-donebadge 那一组）。
+     inline-size 只约束行内轴，不影响 grid 分给它的高度。 */
+  container-type: inline-size;
 }
 /* 最右一列不画右边线：整片日历右侧不封口（对齐参考图）。
    但**最后一行保留**下边线 —— 连续滚动时那条线正是两个月份之间的分隔。
@@ -3442,6 +3500,183 @@
   margin-top: -5.5px;
   border-radius: 2px;
   background: var(--tt-c, #888888);
+}
+
+/* ===== 任务卡（设置里把某个类型声明成「任务」后，这类记录换这套长相） =====
+   观感取向：滴答清单那种「白卡片 + 空心方框」，但要跟本插件的类型色体系融合 ——
+   所以底色取**类型色的低浓度**（12%），而不是纯白：同一天里几个任务连着排，
+   深浅不同的淡色块能直接读出「这几条是同一类事」，又不会像实心色块那样压过文字。
+   左侧那根 3px 色条保留（本插件所有条目共有的语言，删掉任务卡就跟普通记录分不开了），
+   浓度压到 45% 让它退到背景里去，只作提示。
+   方框是**圆角方形**：圆形在日历里会被读成「时间点 / 单选框」，方形才是待办。
+   普通条目不受任何影响：下面这些规则全部挂在 .is-task 上。 */
+.north-caltab-item.is-task {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  /* 左内边距 12px = 色条(3px @ left 5) + 4px 间距；方框就落在这条基线上 */
+  padding: 1px 8px 1px 12px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 12%,
+    transparent
+  );
+}
+/* 色条：压到 45%、圆角拉满 —— 退成背景里的提示，不与方框争视觉 */
+.north-caltab-item.is-task::before {
+  left: 5px;
+  width: 3px;
+  height: 11px;
+  margin-top: -5.5px;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 45%,
+    transparent
+  );
+}
+.north-caltab-item.is-task .north-caltab-itemtext {
+  /* 0 1 auto：文字**按内容宽**排、需要时再收缩 ——
+     这样「已完成」徽标紧跟在文字后面（对齐参考图），
+     而不是被 1 1 auto 推到条目的最右边。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--b3-theme-on-background);
+}
+/* 完成态：标题划掉 + 压淡，整条退到背景里（滴答清单同款反馈）。
+   色条同步降到 22%，方框填满类型色 —— 一眼扫过去就知道这条已经办完。 */
+.north-caltab-item.is-task.is-done {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 7%,
+    transparent
+  );
+}
+.north-caltab-item.is-task.is-done::before {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 22%,
+    transparent
+  );
+}
+.north-caltab-item.is-task.is-done .north-caltab-itemtext {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* 复选框本体：一个**不带按钮外观**的可点区域 —— 没有背景、没有边框、
+   没有默认内边距，所以它看起来就是方框本身，而不是"按钮里放了个方框"。
+   尺寸不写死，由里面的图标（+1px 内边距）撑开：月视图 16px 图标 → 18px 按钮，
+   时间轴 14px → 16px，表格 12px → 14px，各处按自己的字号自动配平，
+   不会出现「小字号里塞了个大框」。日历格里一行才 12px 字高，
+   方框太小会显得局促、也不容易点中；负外边距把多出来的那点高度还回去，
+   所以行高、条目高度都不变，只是方框更舒展。
+   宽高比锁定 1:1：不加 width，靠 svg 自己撑 —— 一旦写死宽高，
+   时间轴那种 14px 图标就会被拉成方块里的一个小点。
+   悬停只给一点点同色底，不描边、不加圈 —— 保持「融合」这条主线。 */
+.north-caltab-taskbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 1px;
+  margin: -3px -2px -3px -2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background 0.15s;
+}
+.north-caltab-taskbox:hover {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 8%,
+    transparent
+  );
+}
+.north-caltab-taskbox:focus-visible {
+  outline: 2px solid var(--b3-theme-primary);
+  outline-offset: 1px;
+}
+/* 普通条目现在也多了一层 .north-caltab-itemtext（任务卡要拿它做 flex 项），
+   所以省略号得落在它身上 —— 挂在父级上时，溢出的是子盒而不是父级的行内流，
+   ellipsis 不会生效。 */
+.north-caltab-item .north-caltab-itemtext {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 复选框的颜色：**纯类型色**（不掺正文色）——
+   方框的填充是 10%，叠在任务卡 12% 的底上合成约 21%，与底色同源，
+   所以它读起来是「这块底里凹下去的一格」，而不是外挂上去的控件。
+   掺正文色会让橙变土黄、绿变墨绿，正是之前看起来发浑的原因。
+   填充浓度写在 SVG 的 fill-opacity 里，这里只定色相，
+   所以深浅主题、任意类型色都不用各写一条。 */
+.north-caltab-taskicon {
+  flex: 0 0 auto;
+  color: var(--tt-c, #888888);
+}
+
+/* ===== 「已完成」小胶囊（对齐 pinch 的做法：标题后面挂一枚小徽标）=====
+   它是标题的**兄弟节点**，不是 ::after —— 完成态的标题带 text-decoration:
+   line-through，而删除线会往下传播且没法在子元素上撤销，
+   写在标题里的徽标会跟着被划一道，看着像「未完成被划掉了」。
+   尺寸取 10px / 行高 14px / 圆角 4px：比正文小一档，
+   只做「这行已经办完」的状态说明，不抢标题。
+   配色沿用类型色：淡底（14%）+ 类型色 62% 混正文色 ——
+   同一条任务在未完成/已完成两种状态里色相一致，只是浓淡不同。
+   左边留 5px 间距，由 margin-left 控制（不用 gap：这里是行内流）。
+   窄格（月视图一格只占七分之一）里徽标会把标题挤成「第...」，
+   所以按**格子实际宽度**做容器查询：< 150px 直接不显示 ——
+   窄格里「划掉的标题 + 淡底」已经足够表达完成态，
+   徽标只在宽度够的地方（时间轴 / 弹窗 / 表格 / 宽屏月视图）出现。 */
+.north-caltab-donebadge {
+  display: inline-block;
+  flex: 0 0 auto;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 14%,
+    transparent
+  );
+  color: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 62%,
+    var(--b3-theme-on-background)
+  );
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 400;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: 1px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* flex 行（月视图任务卡 / 弹窗任务行）本身有 5px gap，
+   徽标的 margin-left 会叠成 10px —— 这两处清零，间距统一由 gap 管。 */
+.north-caltab-item.is-task .north-caltab-donebadge,
+.north-caltab-modal-item.is-task .north-caltab-donebadge {
+  margin-left: 0;
+}
+@container (max-width: 149px) {
+  .north-caltab-day .north-caltab-donebadge {
+    display: none;
+  }
+}
+/* 完成态那枚勾：不再填满类型色，而是**压淡**（65%），
+   贴着卡片的淡底走 —— 完成的事该往后退，不该比未完成的更抢眼。 */
+.north-caltab-taskicon.is-done {
+  opacity: 0.65;
 }
 
 /* 最后一条与 +N 同一行：条目吃掉剩余宽度，徽标固定不缩 */
@@ -3707,6 +3942,95 @@
   display: block;
 }
 
+/* 时间轴上的任务块：与月视图任务卡同一套 —— 类型色淡底 + 左侧圆头色条 + 方框。
+   时间轴是按时间比例摆的，色条是「这段属于哪个类型」的唯一线索，撤不得；
+   底色只比普通块重一档（16% vs 14%），任务才挑得出来又不至于像警报。 */
+.north-caltab-wv-event.is-task {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 16%,
+    transparent
+  );
+}
+.north-caltab-wv-event.is-task::before {
+  width: 3px;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 45%,
+    transparent
+  );
+}
+/* 方框与标题之间的间距挂在按钮上，不挂在里面的 svg 上 ——
+   svg 是 flex 项，给它加 margin 会把按钮撑宽、图标被挤到一侧。
+   vertical-align 是给「按钮落在文字行里」用的：块内标题是行内流，
+   按钮不加这条会贴着基线，看起来比方框高了 2px。 */
+.north-caltab-wv-event.is-task .north-caltab-taskbox {
+  display: inline-flex;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+/* 时间轴上的完成态：块压淡、标题划掉（与月视图同一套反馈） */
+.north-caltab-wv-event.is-task.is-done {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 9%,
+    transparent
+  );
+}
+.north-caltab-wv-event.is-task.is-done .north-caltab-wv-event-titletext {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 当天列表弹窗里的任务行：与月视图任务卡同一套（类型色淡底 + 圆头色条 + 方框） */
+.north-caltab-modal-item.is-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 12%,
+    transparent
+  );
+}
+/* 色条与月视图任务卡同款：加宽一档、降到 45%、更圆 —— 弹窗里空间更大，
+   但两边必须是同一种观感，否则同一个任务在两个地方像两种东西。 */
+.north-caltab-modal-item.is-task::before {
+  left: 6px;
+  width: 4px;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 45%,
+    transparent
+  );
+}
+/* 弹窗行是 flex-start 对齐，方框比首行文字略高，往下压 1px 才与文字视觉齐平。
+   压在按钮上而不是 svg 上：svg 是按钮里的 flex 项，给它 margin 会让图标在框里偏。 */
+.north-caltab-modal-item.is-task .north-caltab-taskbox {
+  margin-top: 1px;
+}
+.north-caltab-modal-item.is-task .north-caltab-itemtext {
+  /* 与月视图同款：文字按内容宽、需要时再收缩，
+     让「已完成」徽标贴着文字，而不是被推到行尾。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--b3-theme-on-background);
+}
+/* 弹窗里的完成态：与月视图同一套（底色再淡、标题划掉） */
+.north-caltab-modal-item.is-task.is-done {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 7%,
+    transparent
+  );
+}
+.north-caltab-modal-item.is-task.is-done .north-caltab-itemtext {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  color: var(--b3-theme-on-surface-light);
+}
 /* ===== 表格视图（第六段位）：当月记录按日分组排成一张表 =====
    列固定为 时间 / 类型 / 内容 / 时长 —— 其它视图都在表达的这四件事，
    这里排成能竖着扫的一列列。表头吸顶，日期分组头吸在表头正下方。
@@ -3959,9 +4283,45 @@
   text-overflow: ellipsis;
   vertical-align: middle;
 }
-/* 内容列：主信息，给正文色；窄了就走省略号（完整内容还有悬停气泡兜着） */
+/* 表格类型胶囊里的任务方框：胶囊是 inline-block、里面是行内流，
+   这里用 vertical-align 把它压到文字中线上（不像 flex 那两处能自动居中）。
+   间距挂在按钮上，svg 只负责显示。 */
+.north-caltab-table-typepill .north-caltab-taskicon {
+  display: block;
+}
+.north-caltab-table-typepill .north-caltab-taskbox {
+  display: inline-flex;
+  margin-right: 3px;
+  vertical-align: -2px;
+}
+/* 表格里的完成态：内容列划掉压淡、类型胶囊降一档 ——
+   与月视图 / 时间轴 / 弹窗同一套反馈，只是这里没有整条底色可淡，
+   所以把「退到背景里」落在文字与胶囊上。 */
+.north-caltab-table-row.is-done .north-caltab-table-contenttext {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-table-row.is-done .north-caltab-table-typepill {
+  background: color-mix(
+    in srgb,
+    var(--tt-c, #888888) 8%,
+    transparent
+  );
+}
+/* 内容列：主信息，给正文色；窄了就走省略号（完整内容还有悬停气泡兜着）。
+   省略号必须落在**内层文字**上：这一列里还多挂了一枚「已完成」徽标，
+   外层是 flex 的话，溢出的是内层盒子，写在外层的 ellipsis 不会生效。 */
 .north-caltab-table-content {
+  display: flex;
+  align-items: center;
+  gap: 0;
   color: var(--b3-theme-on-background);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.north-caltab-table-contenttext {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7066,6 +7426,438 @@ textarea.north-caltab-edit-input {
   color: currentColor;
 }
 
+/* —— 每日回顾：工作台顶部第二张常驻卡 ——
+   与「今日进度」同一套白底淡边（.north-caltab-board-card），
+   这里只补内部结构。整卡不抢戏：左侧一小列「N 年前 + 月日」，
+   右侧类型 / 时间 + 正文；行与行之间用一条极淡的分隔线，
+   与插件里其它列表（表格、当天弹窗）的读法一致。 */
+/* 卡片之间的间距由 .north-caltab-board 的 gap 统一给（12px），
+   这里不要再补 margin —— 补了会变成 24px，比上下两张卡的间距宽出一倍。
+   卡头**不带图标**：工作台其它卡（今日进度 / 记录趋势 / 指标走势）的标题
+   都是纯文字，这里加一枚小图标反而显得多出来一个层级。 */
+.north-caltab-review-list {
+  display: flex;
+  flex-direction: column;
+}
+.north-caltab-review-item {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+  padding: 9px 8px;
+  border: none;
+  /* 透明底而不是背景色：让悬停时才浮起，平时完全贴住卡片 */
+  background: transparent;
+  border-radius: 8px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.north-caltab-review-item + .north-caltab-review-item {
+  /* 分隔线画在行上、不占额外高度：行本身有 padding，视觉上正好居中 */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--b3-border-color) 45%, transparent);
+}
+.north-caltab-review-item:hover {
+  background: var(--b3-list-hover);
+  box-shadow: none;
+}
+.north-caltab-review-item:hover + .north-caltab-review-item {
+  box-shadow: none;
+}
+.north-caltab-review-date {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 1px;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-review-date b {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-review-date i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-review-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.north-caltab-review-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-review-type {
+  color: var(--tt-c, var(--b3-theme-primary));
+  font-weight: 500;
+}
+.north-caltab-review-time {
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-review-tick {
+  flex: 0 0 auto;
+  color: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-review-text {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--b3-theme-on-background);
+  /* 长记录最多两行：回顾是"瞥一眼"，不是完整阅读，点开才有全文 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.north-caltab-review-item.is-done .north-caltab-review-text {
+  color: var(--b3-theme-on-surface-light);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--tt-c, #888) 45%, transparent);
+}
+.north-caltab-review-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--b3-border-color) 45%, transparent);
+}
+.north-caltab-review-hint {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+
+/* —— 回顾足迹：候选池按年分桶，一年一行横条 ——
+   与上面那张回顾卡同一套白底淡边。它不重复"抽到了哪几条"，
+   只说"这些年一共留下多少、集中在哪几年"。
+   为什么用横条而不是竖柱：年份通常只有 3~8 个，竖柱铺在整宽的卡里
+   要么挤成一堆、要么被拉开到两头，中间空得像缺数据；横条天然吃满宽度，
+   年份也能写全（竖柱下面只塞得下「23」）。
+   颜色只给当年那条上主题色：其余用中性灰，一屏只留一个焦点；
+   全部染色反而看不出"哪条是今年"。 */
+.north-caltab-fp-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.north-caltab-fp-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+  cursor: default;
+}
+.north-caltab-fp-year {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-fp-row.is-cur .north-caltab-fp-year {
+  color: var(--b3-theme-primary);
+  font-weight: 600;
+}
+/* 轨道给一条极淡的底线色：条短的时候（1 条）也能看出"这一行有数据"，
+   而不是一条几乎看不见的细线浮在空白里。 */
+.north-caltab-fp-track {
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 5%, transparent);
+  overflow: hidden;
+}
+.north-caltab-fp-track i {
+  display: block;
+  height: 100%;
+  min-width: 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 20%, transparent);
+  transition: background 0.15s;
+}
+.north-caltab-fp-row.is-cur .north-caltab-fp-track i {
+  background: color-mix(in srgb, var(--b3-theme-primary) 62%, transparent);
+}
+.north-caltab-fp-row:hover .north-caltab-fp-track i {
+  background: var(--b3-theme-primary);
+}
+.north-caltab-fp-num {
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-fp-row.is-cur .north-caltab-fp-num {
+  color: var(--b3-theme-primary);
+  font-weight: 600;
+}
+.north-caltab-fp-foot {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--b3-border-color) 45%, transparent);
+}
+.north-caltab-fp-first {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.north-caltab-fp-first:hover {
+  background: var(--b3-list-hover);
+  color: var(--b3-theme-on-background);
+}
+
+/* —— 任务统计（工作台「任务」分类） ——
+   与其它工作台卡片同一套白底淡边。主角是**完成率**：一个很大的百分比 +
+   一条进度轨，右边两块明细。任务页最想知道的是"该做的做完了没"，
+   条数只是过程量，所以把百分比放大、条数缩小。
+   进度条走主色（不是类型色）：这一条说的是"整体完成度"，
+   跨多个任务类型，用任何一个类型色都会偏袒。 */
+.north-caltab-task-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 2px 0 4px;
+}
+.north-caltab-task-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.north-caltab-task-rate b {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--b3-theme-primary);
+  font-variant-numeric: tabular-nums;
+}
+/* 百分号缩小、压到基线附近：跟数字一样大会抢戏 */
+.north-caltab-task-rate b i {
+  margin-left: 1px;
+  font-style: normal;
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+.north-caltab-task-rate span {
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-task-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.north-caltab-task-track {
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 8%, transparent);
+  overflow: hidden;
+}
+.north-caltab-task-track i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--b3-theme-primary);
+  transition: width 0.3s;
+}
+.north-caltab-task-barnote {
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-task-barnote b {
+  color: var(--b3-theme-on-background);
+  font-weight: 600;
+}
+/* 三块明细：与「记录」那张 6 格同一套读法（大数字 + 小标签），
+   但这里只有三块，横向排一行就够，不必再切网格。 */
+.north-caltab-task-cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.north-caltab-task-cell {
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 4%, transparent);
+}
+.north-caltab-task-cell b {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--b3-theme-on-background);
+  font-variant-numeric: tabular-nums;
+}
+.north-caltab-task-cell b i {
+  margin-left: 1px;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--b3-theme-on-surface-light);
+}
+.north-caltab-task-cell span {
+  font-size: 10.5px;
+  color: var(--b3-theme-on-surface-light);
+}
+/* 类型分布：一年一行横条，右侧写「已完成/总数」——
+   单看条数不知道做完了多少，两个数并排才读得出"哪类堆着没做"。 */
+.north-caltab-task-types {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--b3-border-color) 45%, transparent);
+}
+.north-caltab-task-type {
+  display: grid;
+  grid-template-columns: minmax(60px, 116px) minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 10px;
+}
+.north-caltab-task-typename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--b3-theme-on-surface-light);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.north-caltab-task-typename i {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tt-c, var(--b3-theme-primary));
+}
+.north-caltab-task-typetrack {
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--b3-theme-on-background) 5%, transparent);
+  overflow: hidden;
+}
+.north-caltab-task-typetrack i {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tt-c, var(--b3-theme-primary)) 60%, transparent);
+}
+.north-caltab-task-typenum {
+  text-align: right;
+  font-size: 11px;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 任务节奏：新增 vs 完成，两组柱并排 ——
+   上面那张只说"总体完成率"，看不出"是不是堆到最后一天突击"。
+   两组柱同轴对比：灰 = 新增（当天记下的任务数），主色 = 完成（当天勾掉的），
+   完成高过新增就是"在还旧账"，反过来就是"越堆越多"。
+   柱宽固定、容器可横向滚：一年按月只有 12 根，一个月按天有 30 根，
+   两者都不该被拉伸成不同粗细。 */
+.north-caltab-task-rchart {
+  display: flex;
+  align-items: flex-end;
+  /* 居中：一年只有 12 根柱、每根封顶 44px，靠左排会在右侧留一大片空白，
+     看着像图没画完。月份多了（按天 30 根）时这里自然铺满，居中不起作用。 */
+  justify-content: center;
+  gap: 3px;
+  height: 104px;
+  padding: 4px 2px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.north-caltab-task-rchart::-webkit-scrollbar {
+  display: none;
+}
+.north-caltab-task-rcol {
+  display: flex;
+  flex: 1 1 0;
+  /* 上限 64px：一年只有 12 根柱子，不封顶会被拉成十几根细线散在整行里；
+     一个月 30 根时又自然收窄，两种粒度都不用手动调。
+     64px 是「12 根大致铺满、又不至于每根粗得像色块」的那一档。 */
+  max-width: 64px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 9px;
+  height: 100%;
+  cursor: default;
+}
+.north-caltab-task-rbars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+.north-caltab-task-rbars i {
+  flex: 1 1 0;
+  max-width: 18px;
+  border-radius: 2px 2px 1px 1px;
+  transition: opacity 0.15s;
+}
+.north-caltab-task-rbars i.is-add {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 20%, transparent);
+}
+.north-caltab-task-rbars i.is-done {
+  background: color-mix(in srgb, var(--b3-theme-primary) 62%, transparent);
+}
+.north-caltab-task-rcol:hover .north-caltab-task-rbars i {
+  opacity: 0.75;
+}
+.north-caltab-task-rlabel {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  line-height: 1;
+  color: var(--b3-theme-on-surface-light);
+  font-variant-numeric: tabular-nums;
+}
+/* 卡头那对图例：颜色块 + 文字，跟柱子一一对应 */
+.north-caltab-task-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.north-caltab-task-leg i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+.north-caltab-task-leg.is-add i {
+  background: color-mix(in srgb, var(--b3-theme-on-background) 20%, transparent);
+}
+.north-caltab-task-leg.is-done i {
+  background: color-mix(in srgb, var(--b3-theme-primary) 62%, transparent);
+}
+
 /* —— ② 记录趋势 + 本期 vs 上期 ——
    左边一条按天的折线（淡色面积 + 采样点），右边一栏环比。
    这张卡原先是一整年日历热力图，已整个去掉：记录少的时候它几乎全是空白，
@@ -7669,7 +8461,8 @@ textarea.north-caltab-edit-input {
   color: var(--b3-theme-on-surface-light);
 }
 
-/* 窄屏：今日进度两列并一列、「趋势 + 环比」两栏并一栏、打卡点阵收紧 */
+/* 窄屏：今日进度两列并一列、「趋势 + 环比」两栏并一栏、打卡点阵收紧、
+   回顾卡的日期列收窄 */
 @media (max-width: 720px) {
   .north-caltab-board-progress {
     grid-template-columns: 1fr;
@@ -7692,4 +8485,15 @@ textarea.north-caltab-edit-input {
   .north-caltab-board-tltick:not(.is-wide) {
     display: none;
   }
+  /* 回顾卡：日期列收窄一点，把宽度让给正文（62px 在窄屏上偏奢侈） */
+  .north-caltab-review-item {
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 8px;
+  }
+  /* 底部「同一天固定这一批」在窄屏会挤成两行，让给按钮 */
+  .north-caltab-review-hint {
+    display: none;
+  }
 }
+
+
